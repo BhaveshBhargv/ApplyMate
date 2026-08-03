@@ -143,8 +143,8 @@ def render_header(active: str) -> None:
     st.navigation(position="hidden").
     """
     st.markdown(
-        '<div class="rb-header"><span class="rb-word">R<em>é</em>sumé</span>'
-        '<span class="rb-tag">Studio</span></div>',
+        '<div class="rb-header"><span class="rb-word">Apply<em>Mate</em></span>'
+        '<span class="rb-tag">Résumé + Jobs</span></div>',
         unsafe_allow_html=True,
     )
     spacer, b1, b2, b3 = st.columns([5, 1.4, 1.4, 1.4])

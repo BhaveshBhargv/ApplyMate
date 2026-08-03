@@ -11,7 +11,7 @@ from html import escape
 import streamlit as st
 
 from utils import job_search
-from utils.job_search import COUNTRIES, WORK_TYPES, search_jobs, skills_in_text
+from utils.job_search import COUNTRIES, INDUSTRIES, WORK_TYPES, search_jobs, skills_in_text
 from utils.session_manager import get_resume_data, init_session_state, set_job_description
 from utils.theme import inject_theme, render_download_footer, render_header
 
@@ -37,9 +37,10 @@ def _safe_link(url: str) -> str:
     return url if url.startswith(("http://", "https://")) else ""
 
 
-def run_search(title: str, location: str, country: str, work_type: str, limit: int) -> None:
+def run_search(title: str, location: str, country: str, work_type: str,
+               limit: int, industry: str = "Any") -> None:
     """Fetch jobs, tag each with which of the résumé's skills it mentions."""
-    result = search_jobs(title, location, country, work_type, limit)
+    result = search_jobs(title, location, country, work_type, limit, industry)
     my_skills = resume.all_skills_flat()
     if my_skills:
         for job in result.jobs:
@@ -62,17 +63,22 @@ with st.form("job_search_form"):
         location = st.text_input("Location", value=default_location,
                                 placeholder="e.g. London")
 
-    c3, c4, c5 = st.columns([1, 1, 1])
+    c3, c4 = st.columns(2)
     with c3:
         work_type = st.selectbox("Work type", WORK_TYPES, index=0)
     with c4:
+        industry = st.selectbox("Industry", list(INDUSTRIES.keys()), index=0,
+                                help="Narrows results to a job category. Leave as Any to search all.")
+
+    c5, c6 = st.columns([1, 1])
+    with c5:
         country_code = st.selectbox(
             "Country", list(COUNTRIES.keys()),
             format_func=lambda code: COUNTRIES[code],
             index=list(COUNTRIES.keys()).index("gb"),
             help="Which country Adzuna searches. Remote results aren't limited by this.",
         )
-    with c5:
+    with c6:
         limit = st.slider("Results per source", 5, 30, 15)
 
     searched = st.form_submit_button("🔎 Search jobs", type="primary")
@@ -82,7 +88,7 @@ if searched:
         st.warning("Enter a job title to search.")
     else:
         with st.spinner("Searching openings..."):
-            run_search(title, location, country_code, work_type, limit)
+            run_search(title, location, country_code, work_type, limit, industry)
 
 # --- Results ------------------------------------------------------------------
 result = st.session_state.get("job_results")

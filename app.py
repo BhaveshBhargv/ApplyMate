@@ -1,13 +1,13 @@
-"""AI Résumé Studio -- entry point.
+"""ApplyMate -- entry point.
 
-Two pages only: the Dashboard (edit + live preview + download) and ATS Match.
-Registered with st.navigation(position="hidden"); each page draws its own
-custom top bar via utils.theme.render_header. set_page_config lives here so it
-runs exactly once for the whole app.
+Three pages: the Dashboard (edit + live preview + download), ATS Match, and
+Jobs (search live openings). Registered with st.navigation(position="hidden");
+each page draws its own custom top bar via utils.theme.render_header.
+set_page_config lives here so it runs exactly once for the whole app.
 """
 import streamlit as st
 
-st.set_page_config(page_title="Résumé Studio", page_icon="📄", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="ApplyMate", page_icon="📄", layout="wide", initial_sidebar_state="collapsed")
 
 pages = [
     st.Page("pages/1_🧭_Dashboard.py", title="Dashboard", icon="🧭", url_path="dashboard", default=True),

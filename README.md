@@ -2,9 +2,10 @@
 
 A web app for building an ATS-friendly resume tailored to a specific job
 description -- without inventing experience, skills, or qualifications the
-user doesn't have.
+user doesn't have -- and then searching live job openings that match it,
+straight from the same résumé.
 
-**🔗 Live demo:** https://resume-builder-4kmyg83ru5rh6gygffosls.streamlit.app/
+**🔗 Live demo:** https://applymate-bb.streamlit.app/
 
 ## Status: Complete (all phases + export)
 
@@ -25,11 +26,16 @@ user doesn't have.
 - [x] **Export** -- Download the finished resume as an ATS-friendly Word
       (.docx) or PDF file (single column, standard headings, real bullets,
       no tables or graphics).
+- [x] **Job search** -- Search live openings by job title, location, work
+      type, industry, and country via free, official APIs (Adzuna + Remotive).
+      Each listing shows which of your skills it mentions and can be sent to
+      ATS Match in one click. Read-only: it only links to official postings.
 
 ## Tech Stack
 
 Python, Streamlit, pypdf, python-docx, reportlab, pandas, scikit-learn,
-openai (used as an OpenAI-compatible client for OpenRouter). Two deviations
+requests (Adzuna + Remotive job APIs), and openai (used as an
+OpenAI-compatible client for OpenRouter). Two deviations
 from the originally-listed stack, each explained in its phase notes below:
 **scikit-learn** replaces spaCy for Phase 3 (no runtime model download), and
 Phase 4 uses **Tencent Hunyuan 3 (`tencent/hy3:free`) via OpenRouter** instead
@@ -92,23 +98,20 @@ preview.
   `st.session_state` for the duration of the browser session, and exposes
   small functions (`add_education`, `remove_experience`, `set_resume_data`,
   etc.) so pages never touch `session_state` directly.
-- **Navigation is a top bar, not a sidebar.** `app.py` registers every page
-  with `st.navigation(..., position="hidden")` -- purely so
+- **Navigation is a custom top bar, not a sidebar.** `app.py` registers the
+  three pages with `st.navigation(..., position="hidden")` -- purely so
   `st.switch_page()` and URL routing work -- and each page then calls
-  `utils.navigation.render_top_nav()` to draw its own horizontal row of page
-  buttons, plus `render_prev_next()` at the bottom for Previous/Left and
-  Next/Right buttons. `utils/navigation.py`'s `PAGES` list is the single
-  source of truth for page order, titles, and icons. (Streamlit's built-in
-  `position="top"` was tried first, but with 8 pages it collapses most of
-  them into an "N more" dropdown instead of showing them all -- rendering
-  the bar manually avoids that.)
-- Each file in `pages/` is a self-contained form for one resume section.
-  Multi-entry sections (Education, Experience, Projects, Skills) let you add
-  or remove entries freely. Each entry's fields live inside an `st.form`
-  with its own **Save Entry** button -- nothing is written back to the data
-  model until you click it, so typing never triggers a page rerun mid-edit.
-  The only feedback shown is the success/error alert immediately after that
-  click; there's no separate summary text elsewhere on the page.
+  `utils.theme.render_header(active)` to draw the wordmark plus a row of
+  **Dashboard / ATS Match / Jobs** buttons, highlighting the current one.
+- **The Dashboard is two panels.** The left panel holds the section editors as
+  tabs (**Personal, Education, Experience, Projects, Skills, Import**); the
+  right panel is a live "paper" preview of the résumé that updates on save.
+  The section editors live in `utils/forms.py` (not in `pages/`), so all three
+  pages share the same widgets. Multi-entry sections (Education, Experience,
+  Projects, Skills) let you add or remove entries freely. Each section's fields
+  live inside an `st.form` with its own **Save** button -- nothing is written
+  back to the data model until you click it, so typing never triggers a rerun
+  mid-edit. The only feedback is the success/error alert right after that click.
 - `utils/validators.py` checks that Email, Phone (must include a country
   code, e.g. `+1 555-123-4567`), and URL fields (LinkedIn, Portfolio, Project
   URL) are well-formed before they're saved; scheme-less URLs like
@@ -118,16 +121,15 @@ preview.
   them as a plain `"Aug 2019"` string. `is_start_after_end()` blocks saving
   an entry where the start date comes after the end date.
 - GPA uses `st.number_input` so only numeric values can be entered at all.
-- `pages/8_📄_Review.py` gives a read-only summary of everything entered so
-  far, and flags which sections are still incomplete.
+- The Dashboard's right panel (`utils/resume_html.py`) is the live review --
+  it renders exactly what the `.docx` / `.pdf` will export, so there's no
+  separate Review page; you see the finished résumé update as you save.
 
 ### Phase 2 -- Upload an existing resume
 
-- The Home page offers two starting points: **Upload a Resume** or **Enter
-  Details Manually**. Both eventually land on the same forms -- uploading
-  just pre-fills them.
-- `pages/1_📤_Upload_Resume.py` accepts a `.pdf`, `.docx`, or `.txt` file and
-  calls `utils/resume_parser.py`.
+- The **Import** tab in the Dashboard's left panel accepts a `.pdf`, `.docx`,
+  or `.txt` file and calls `utils/resume_parser.py` to pre-fill every section,
+  as an alternative to entering everything by hand.
 - `resume_parser.py` is deliberately a **heuristic, rule-based parser**
   (regex + section-heading detection), not AI -- resume formatting varies
   too much for anything to be trustworthy without review:
@@ -149,17 +151,16 @@ preview.
     a bare year like `"2019"` is left blank rather than guessing a month
     that was never stated, in keeping with the app's "never invent" rule.
 - Parsed data is loaded straight into the session's resume data via
-  `set_resume_data()`, so it appears immediately on every page including
-  Review -- the user explicitly asked uploading to fill everything in, and
-  the parser only ever transcribes what the file actually says, never
+  `set_resume_data()`, so it appears immediately across every section tab and
+  in the live preview -- the user explicitly asked uploading to fill everything
+  in, and the parser only ever transcribes what the file actually says, never
   invents content. What isn't guaranteed is *accuracy*: parsing can misread
-  a line, so every page's own **Save Entry** button is still there to let
-  the user correct anything before treating it as final.
-- Anything routed to an `ExtraSection` (unmatched heading) is shown on the
-  Upload page immediately after parsing, and again on the Review page under
-  **"Additional Information (from uploaded resume)"**, tagged with its
-  original heading -- so nothing from the uploaded file is silently lost,
-  even if the app couldn't figure out where it belongs.
+  a line, so each section tab's own **Save** button is still there to let the
+  user correct anything before treating it as final.
+- Anything routed to an `ExtraSection` (unmatched heading) is carried into the
+  résumé under its **original heading** (shown in the live preview and included
+  in the export) -- so nothing from the uploaded file is silently lost, even if
+  the app couldn't figure out where it belongs.
 
 ### Phase 3 -- Job description matching (ATS)
 
@@ -194,15 +195,15 @@ preview.
 
 - `utils/ai_assistant.py` calls an OpenAI-compatible chat API (the `openai`
   SDK pointed at OpenRouter, serving Tencent's `tencent/hy3:free`) and exposes
-  four features, surfaced in-context on the pages they relate to:
-  - **Professional summary** (Personal Details) -- drafts a 2-3 sentence
+  four features, surfaced in-context on the tabs/pages they relate to:
+  - **Professional summary** (Personal tab) -- drafts a 2-3 sentence
     summary from the experience, projects, and skills you entered.
-  - **Bullet-point rewrite** (Experience, per role) -- tightens your saved
+  - **Bullet-point rewrite** (Experience tab, per role) -- tightens your saved
     bullets into stronger, action-verb-led phrasing.
-  - **Project enhancement** (Projects, per project) -- polishes the
+  - **Project enhancement** (Projects tab, per project) -- polishes the
     description and bullet points.
-  - **Resume suggestions** (Review) -- read-only, actionable advice on the
-    whole resume.
+  - **Resume suggestions** (ATS Match page) -- read-only, actionable advice on
+    the whole resume, tailored to the job description if one is entered.
 - **Never fabricates.** A strict system prompt forbids inventing employers,
   dates, metrics, technologies, or skills; every function only rephrases
   content you already provided. All output is shown as a **proposal you
@@ -245,10 +246,13 @@ switch `OPENROUTER_MODEL` to `tencent/hy3` (paid) if you hit the limit.
 ### Job search
 
 - The **Jobs** page takes a job title, location, work type (Any / Remote /
-  Hybrid / On-site) and country, and returns live openings as cards, each
-  linking to the official posting. Title and location are prefilled from the
-  résumé you're building, and the Dashboard's **"Search jobs for this résumé"**
-  button jumps straight here and auto-searches for your most recent role.
+  Hybrid / On-site), **industry** and country, and returns live openings as
+  cards, each linking to the official posting. Title and location are prefilled
+  from the résumé you're building, and the Dashboard's **"Search jobs for this
+  résumé"** button jumps straight here and auto-searches for your most recent
+  role. Industry maps to each source's own category taxonomy (`INDUSTRIES` in
+  `utils/job_search.py`), so "Data & Analytics", "Design", "Finance & Legal",
+  etc. narrow both Adzuna and Remotive where each has a matching category.
 - Each card shows which of **your skills** the listing mentions (green chips) --
   a positive-only signal, since a truncated description can only hide a match,
   never invent one. For the full matched-vs-missing breakdown, **🎯 Match in ATS**
@@ -278,8 +282,9 @@ keys. To also get on-site / hybrid / location-based roles, add free Adzuna keys:
 
 ### Export -- download the finished resume
 
-- The **Download** page turns the current `ResumeData` into a **Word (.docx)**
-  file (`utils/docx_export.py`, python-docx) or a **PDF** (`utils/pdf_export.py`,
+- The **download footer** (on every page, via `utils/theme.render_download_footer`)
+  turns the current `ResumeData` into a **Word (.docx)** file
+  (`utils/docx_export.py`, python-docx) or a **PDF** (`utils/pdf_export.py`,
   reportlab), delivered via `st.download_button`.
 - Both use the same deliberately plain, **ATS-friendly** layout: one column,
   standard fonts, uppercase section headings with a thin rule, and real bullet
@@ -309,6 +314,7 @@ features.
   manual entry and resume parsing only ever surface what the user actually
   wrote, and parsed data must still be reviewed and explicitly saved before
   it's kept.
-- UI (`pages/`), data models (`models/`), and business logic (`utils/`) are
-  kept in separate modules.
+- UI (`pages/`, plus shared widgets in `utils/forms.py` and `utils/theme.py`),
+  data models (`models/`), and business logic (`utils/`) are kept in separate
+  modules.
 - Type hints are used throughout; important functions have docstrings.

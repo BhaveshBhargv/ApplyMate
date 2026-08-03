@@ -55,6 +55,35 @@ _CURRENCY = {
 
 WORK_TYPES = ["Any", "Remote", "Hybrid", "On-site"]
 
+# Industry -> (Adzuna category tag, Remotive category slug). Each source has its
+# own taxonomy, so an industry maps to whichever category each one recognises;
+# None means that source has no matching category and is left unfiltered.
+INDUSTRIES = {
+    "Any": (None, None),
+    "Software Development": ("it-jobs", "software-dev"),
+    "Data & Analytics": ("it-jobs", "data"),
+    "Engineering": ("engineering-jobs", None),
+    "Design": ("creative-design-jobs", "design"),
+    "Product": (None, "product"),
+    "DevOps / Sysadmin": ("it-jobs", "devops"),
+    "Marketing": ("pr-advertising-marketing-jobs", "marketing"),
+    "Sales": ("sales-jobs", "sales"),
+    "Finance & Legal": ("accounting-finance-jobs", "finance-legal"),
+    "Customer Support": ("customer-services-jobs", "customer-support"),
+    "Human Resources": ("hr-jobs", "hr"),
+    "QA": ("scientific-qa-jobs", "qa"),
+    "Healthcare": ("healthcare-nursing-jobs", None),
+    "Teaching": ("teaching-jobs", None),
+}
+
+
+def _adzuna_category(industry: str) -> Optional[str]:
+    return INDUSTRIES.get(industry, (None, None))[0]
+
+
+def _remotive_category(industry: str) -> Optional[str]:
+    return INDUSTRIES.get(industry, (None, None))[1]
+
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
@@ -175,7 +204,7 @@ def _format_salary(country: str, lo, hi) -> str:
 
 
 def search_adzuna(title: str, location: str, country: str, work_type: str,
-                  limit: int) -> Tuple[List[JobPosting], Optional[str]]:
+                  limit: int, industry: str = "Any") -> Tuple[List[JobPosting], Optional[str]]:
     """Query Adzuna. Returns (jobs, error_message-or-None)."""
     app_id, app_key = _adzuna_creds()
     if not (app_id and app_key):
@@ -197,6 +226,9 @@ def search_adzuna(title: str, location: str, country: str, work_type: str,
     }
     if location.strip():
         params["where"] = location.strip()
+    category = _adzuna_category(industry)
+    if category:
+        params["category"] = category
 
     url = f"{_ADZUNA_BASE}/{country}/search/1"
     try:
@@ -250,9 +282,12 @@ def _is_relevant(job_title: str, category: str, tokens: List[str]) -> bool:
     return any(tok in haystack for tok in tokens)
 
 
-def search_remotive(title: str, limit: int) -> Tuple[List[JobPosting], Optional[str]]:
+def search_remotive(title: str, limit: int, industry: str = "Any") -> Tuple[List[JobPosting], Optional[str]]:
     """Query Remotive (remote-only, no auth). Returns (jobs, error-or-None)."""
     params = {"search": title.strip(), "limit": max(1, min(limit, 50))}
+    category = _remotive_category(industry)
+    if category:
+        params["category"] = category
     try:
         resp = requests.get(_REMOTIVE_BASE, params=params, timeout=_TIMEOUT)
     except requests.RequestException as exc:
@@ -300,7 +335,7 @@ def _dedupe(jobs: List[JobPosting]) -> List[JobPosting]:
 
 
 def search_jobs(title: str, location: str, country: str, work_type: str,
-                limit: int = 15) -> SearchResult:
+                limit: int = 15, industry: str = "Any") -> SearchResult:
     """Search enabled sources, merge, dedupe. Never raises -- errors become notices.
 
     Remotive (remote-only) is queried when the user wants remote work
@@ -310,13 +345,13 @@ def search_jobs(title: str, location: str, country: str, work_type: str,
     result = SearchResult(adzuna_configured=adzuna_configured())
     collected: List[JobPosting] = []
 
-    adzuna_jobs, adzuna_err = search_adzuna(title, location, country, work_type, limit)
+    adzuna_jobs, adzuna_err = search_adzuna(title, location, country, work_type, limit, industry)
     collected += adzuna_jobs
     if adzuna_err:
         result.notices.append(adzuna_err)
 
     if work_type in ("Any", "Remote"):
-        remotive_jobs, remotive_err = search_remotive(title, limit)
+        remotive_jobs, remotive_err = search_remotive(title, limit, industry)
         collected += remotive_jobs
         if remotive_err:
             result.notices.append(remotive_err)
