@@ -1,0 +1,25 @@
+# Phase 1 -- form UI and data models
+streamlit>=1.38
+pandas>=2.2.3
+
+# Phase 2 -- resume upload/parsing (reads existing .pdf/.docx resumes)
+pypdf>=4.3.0
+python-docx>=1.1.2
+
+# Phase 3 -- job description parsing / ATS matching
+scikit-learn>=1.5.1
+# spaCy is listed in the original stack but needs a ~12MB model downloaded at
+# runtime; Phase 3 uses scikit-learn (TF-IDF) plus a rule-based keyword
+# extractor instead, which is more robust in a sandboxed environment.
+# spacy>=3.7.5
+
+# Phase 4 -- AI rewriting via Tencent Hunyuan 3 (tencent/hy3:free) through
+# OpenRouter's OpenAI-compatible API. The openai SDK is the client; base URL,
+# model, and key are configurable so any OpenAI-compatible endpoint works.
+openai>=1.40.0
+
+# Document export -- Word (python-docx, above) and PDF (reportlab)
+reportlab>=4.2.2
+
+# Job search -- HTTP calls to the Adzuna and Remotive job APIs
+requests>=2.31.0

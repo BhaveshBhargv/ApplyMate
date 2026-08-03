@@ -1,0 +1,38 @@
+name: CI
+
+# Runs on every push and pull request. This does NOT deploy the app --
+# a Streamlit app needs a live Python server and cannot run on GitHub Pages
+# (static hosting only). To host it, use Streamlit Community Cloud
+# (https://share.streamlit.io) and point it at app.py. This workflow just
+# verifies the app installs and its modules import cleanly on each change.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Byte-compile all sources (catches syntax errors)
+        run: python -m compileall app.py models utils pages
+
+      - name: Import smoke test (catches broken imports)
+        run: |
+          python -c "import models.resume_data, utils.session_manager, utils.validators, utils.date_picker, utils.navigation, utils.resume_parser, utils.ats_analyzer; print('imports OK')"
