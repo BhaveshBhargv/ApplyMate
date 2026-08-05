@@ -136,7 +136,7 @@ def render_resume_html(resume: ResumeData) -> str:
 /* Scroll the sheet in place: fixed viewport height, content scrolls inside,
    so a long résumé no longer stretches the whole page. */
 .rb-scroll {{
-  max-height: calc(100vh - 190px);
+  max-height: calc(100vh - 100px);
   overflow-y: auto;
   overflow-x: hidden;
   padding: 6px 10px 6px 2px;

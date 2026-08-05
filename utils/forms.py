@@ -90,7 +90,7 @@ def render_education() -> None:
         st.caption("No education yet.")
     for entry in resume.education:
         with st.expander(f"{entry.institution or 'New entry'} — {entry.degree or 'Untitled'}",
-                         expanded=not entry.institution, key=f"edu_x_{entry.id}"):
+                         expanded=not entry.institution):
             with st.form(f"edu_f_{entry.id}"):
                 institution = st.text_input("Institution *", value=entry.institution, key=f"edu_i_{entry.id}")
                 degree = st.text_input("Degree *", value=entry.degree, key=f"edu_d_{entry.id}")
@@ -141,7 +141,7 @@ def render_experience() -> None:
         st.caption("No experience yet.")
     for entry in resume.experience:
         with st.expander(f"{entry.job_title or 'New role'} at {entry.company or 'Company'}",
-                         expanded=not entry.company, key=f"exp_x_{entry.id}"):
+                         expanded=not entry.company):
             with st.form(f"exp_f_{entry.id}"):
                 job_title = st.text_input("Job title *", value=entry.job_title, key=f"exp_t_{entry.id}")
                 company = st.text_input("Company *", value=entry.company, key=f"exp_co_{entry.id}")
@@ -185,10 +185,10 @@ def render_projects() -> None:
     if not resume.projects:
         st.caption("No projects yet.")
     for entry in resume.projects:
-        with st.expander(f"{entry.name or 'New project'}", expanded=not entry.name, key=f"proj_x_{entry.id}"):
+        with st.expander(f"{entry.name or 'New project'}", expanded=not entry.name):
             with st.form(f"proj_f_{entry.id}"):
                 name = st.text_input("Project name *", value=entry.name, key=f"proj_n_{entry.id}")
-                url = st.text_input("URL (optional)", value=entry.url, key=f"proj_u_{entry.id}",
+                url = st.text_input("URL (optional)", value=entry.url,
                                     placeholder="github.com/you/repo")
                 desc = st.text_area("Short description", value=entry.description,
                                     key=form_key(f"proj_d_{entry.id}"), height=70)
@@ -224,7 +224,7 @@ def render_skills() -> None:
         st.caption("No skills yet. Add a category like 'Programming Languages'.")
     for entry in resume.skills:
         with st.expander(f"{entry.category_name or 'New category'} ({len(entry.skills)})",
-                         expanded=not entry.category_name, key=f"sk_x_{entry.id}"):
+                         expanded=not entry.category_name):
             with st.form(f"sk_f_{entry.id}"):
                 name = st.text_input("Category name *", value=entry.category_name, key=f"sk_n_{entry.id}",
                                      placeholder="e.g. Programming Languages")
