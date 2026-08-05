@@ -21,7 +21,7 @@ LINE = "#E4E4E7"          # zinc-200 -- hairlines
 ACCENT = "#10B981"        # emerald-500 -- the single accent
 ACCENT_INK = "#059669"    # emerald-600 -- accent hover
 WASH = "#ECFDF5"          # emerald-50 -- chip fills
-CHIP_BORDER = "#0A0A0A"   # emerald-200
+CHIP_BORDER = "#A7F3D0"   # emerald-200
 BTN = "#18181B"           # near-black button fill
 BTN_HOVER = "#27272A"     # zinc-800 -- button hover
 GAP = "#E11D48"           # rose-600 -- ATS "missing" (semantic only)
@@ -47,7 +47,6 @@ _CSS = f"""
 [data-testid="stToolbar"] {{ right: 0.5rem; }}
 #MainMenu, footer, [data-testid="stDecoration"] {{ display: none; }}
 [data-testid="stMainBlockContainer"] {{ max-width: 1240px; padding: 1.3rem 2.4rem 4rem; }}
-[data-testid="stMarkdownContainer"] {{ color: var(--text); }}
 
 /* Top bar */
 .rb-header {{ display: flex; align-items: baseline; gap: 0.5rem; }}
@@ -66,18 +65,31 @@ _CSS = f"""
 [data-testid="stBaseButton-primary"] {{ background: var(--btn); border: 1px solid var(--btn); color: #fff; }}
 [data-testid="stBaseButton-primary"]:hover {{ background: var(--btn-hover); border-color: var(--btn-hover); }}
 [data-testid="stBaseButton-primary"]:disabled {{ background: var(--btn); border-color: var(--btn); color: #fff; opacity: 1; }}
+/* Button labels live in a nested markdown container -- colour them explicitly so
+   the label is visible (a dark label on a dark primary button would vanish). */
+[data-testid="stBaseButton-primary"] p, [data-testid="stBaseButton-primary"] div {{ color: #fff !important; }}
+[data-testid="stBaseButton-secondary"] p {{ color: var(--text); }}
+[data-testid="stBaseButton-secondary"]:hover p {{ color: var(--accent-ink); }}
 .stButton > button:active, .stDownloadButton > button:active {{ transform: translateY(1px); }}
+
+/* The "Search jobs for this résumé" action -- highlighted in emerald so it pops. */
+.st-key-dash_find_jobs [data-testid="stBaseButton-secondary"] {{
+  background: var(--accent); border-color: var(--accent); color: #fff;
+  box-shadow: 0 8px 20px -8px rgba(16,185,129,.55); }}
+.st-key-dash_find_jobs [data-testid="stBaseButton-secondary"]:hover {{
+  background: var(--accent-ink); border-color: var(--accent-ink); }}
+.st-key-dash_find_jobs [data-testid="stBaseButton-secondary"] p {{ color: #fff !important; }}
 
 /* Signature: an emerald tick anchoring a hairline */
 .rb-rule {{ height: 1px; margin: 0.85rem 0 0.2rem;
   background: linear-gradient(90deg, var(--accent) 0%, var(--accent) 2.5%, var(--line) 2.5%, var(--line) 100%); }}
 
-/* Hero: mono kicker over a controlled (not oversized) heavy title */
-.rb-hero {{ margin: 1.5rem 0 1.7rem; }}
+/* Hero: mono kicker over a controlled title, with an emerald accent bar */
+.rb-hero {{ margin: 1.5rem 0 1.9rem; padding-left: 1rem; border-left: 3px solid var(--accent); }}
 .rb-kicker {{ font-family: var(--mono); font-size: 0.68rem; font-weight: 500; letter-spacing: 0.16em;
-  text-transform: uppercase; color: var(--accent-ink); margin: 0 0 0.5rem; }}
-.rb-hero-title {{ font-family: var(--display) !important; font-weight: 700; font-size: 2rem !important;
-  color: var(--text); letter-spacing: -0.035em; line-height: 1.05; margin: 0 0 0.4rem; }}
+  text-transform: uppercase; color: var(--accent-ink); margin: 0 0 0.45rem; }}
+.rb-hero-title {{ font-family: var(--display) !important; font-weight: 700; font-size: 2.1rem !important;
+  color: var(--text); letter-spacing: -0.04em; line-height: 1.04; margin: 0 0 0.45rem; }}
 .rb-eyebrow {{ font-family: var(--mono); font-size: 0.66rem; font-weight: 500; letter-spacing: 0.16em;
   text-transform: uppercase; color: var(--muted); margin: 0 0 0.4rem; }}
 .rb-panel-title {{ font-family: var(--display) !important; font-size: 1.35rem !important; font-weight: 700;
@@ -109,8 +121,8 @@ input::placeholder, textarea::placeholder {{ color: var(--subtle); }}
 [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] * {{ color: var(--muted); }}
 
 /* Cards: white surface, hairline border, tinted diffusion shadow, hover lift */
-[data-testid="stVerticalBlockBorderWrapper"] {{ background: var(--surface); border-color: var(--line); border-radius: 14px;
-  box-shadow: 0 20px 40px -24px rgba(24,24,27,.10); }}
+[data-testid="stVerticalBlockBorderWrapper"] {{ background: var(--surface); border-color: var(--line); border-radius: 16px;
+  box-shadow: 0 18px 38px -24px rgba(24,24,27,.12); }}
 [data-testid="stExpander"] {{ border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }}
 [data-testid="stExpander"] summary {{ font-weight: 600; color: var(--text); }}
 [data-testid="stExpander"] summary:hover {{ color: var(--accent-ink); }}

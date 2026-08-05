@@ -20,12 +20,10 @@ resume = get_resume_data()
 render_hero("Build résumé", "Build your résumé",
             "Fill a section, hit Save, and watch the sheet update live on the right.")
 
-edit_col, preview_col = st.columns([1, 1.05], gap="large")
+edit_col, preview_col = st.columns([1, 1.05], gap="small")
 
 # --- Left: editor -------------------------------------------------------------
 with edit_col:
-    st.markdown('<p class="rb-eyebrow">Edit</p>', unsafe_allow_html=True)
-
     role = resume.experience[0].job_title if resume.experience else ""
     if st.button("Search jobs for this résumé", key="dash_find_jobs",
                  help="Opens the Jobs page and searches openings for your most recent role."):

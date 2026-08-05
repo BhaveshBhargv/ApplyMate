@@ -38,7 +38,7 @@ def render_personal() -> None:
     with st.form("f_personal"):
         c1, c2 = st.columns(2)
         with c1:
-            full_name = st.text_input("Full name *", value=info.full_name)
+            full_name = st.text_input("Full name *", value=info.full_name, placeholder="First & Last Name")
             email = st.text_input("Email *", value=info.email, placeholder="jordan@example.com")
             phone = st.text_input("Phone * (with country code)", value=info.phone, placeholder="+1 555-123-4567")
         with c2:
