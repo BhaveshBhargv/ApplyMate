@@ -18,10 +18,11 @@ straight from the same résumé.
 - [x] **Phase 3** -- Paste/upload a job description, extract its keywords,
       compare them against the resume, and show an ATS match score plus the
       matched and missing keywords.
-- [x] **Phase 4** -- AI (Tencent Hunyuan 3 via OpenRouter) drafts a
-      professional summary, rewrites experience bullet points, enhances
-      project descriptions, and gives whole-resume improvement suggestions --
-      only ever rephrasing content you already entered, never inventing
+- [x] **Phase 4** -- AI (Tencent Hunyuan 3 via OpenRouter) lives on the **ATS
+      Match page**: given your résumé and a job description, it generates
+      **apply-able changes** (a tailored professional summary and rewritten
+      experience bullets) that you review and apply one by one -- only ever
+      rephrasing content you already entered, tuned to the job, never inventing
       anything.
 - [x] **Export** -- Download the finished resume as an ATS-friendly Word
       (.docx) or PDF file (single column, standard headings, real bullets,
@@ -76,14 +77,23 @@ resume-builder/
 └── output/                 # Generated resume files (git-ignored)
 ```
 
-**Design ("Workbench & Paper").** The chrome is a matte editing workbench; the
-résumé is a crisp sheet of paper that updates live as you save. Palette and
-type live in `utils/theme.py` (navy ink, professional blue `#2B5A9E`, Fraunces
-display face, Calibri-style résumé body). The résumé format follows the
+**Design (single committed look -- technical, Vercel-core).** A neutral **Zinc**
+base (`#FAFAFA` surface, `#18181B` text -- never pure black) with one desaturated
+**Emerald** accent (`#10B981`), deliberately avoiding the "AI indigo/purple"
+cliché. Type is **Geist** (UI/display) + **Geist Mono** (numeric and label data --
+job meta, ATS score, pagination, eyebrows), no serif on this software UI. Buttons
+are near-black with white text; the emerald is used sparingly for kickers, links,
+chips, and the score bar. Hairline dividers and generous space are preferred over
+boxed cards; job/proposal cards use a white surface, a 1px border, a tinted
+diffusion shadow, and a subtle hover lift. Motion is fluid CSS only (cards rise
+in, tactile button press) and respects `prefers-reduced-motion`. **No emojis in
+the UI** -- symbols are replaced with clean text/mono labels. The whole system is
+in `utils/theme.py`. The résumé sheet itself stays a calm, conventional white document
+(`utils/resume_html.py`) framed by this chrome -- its own format follows the
 reference layout exactly -- centered name, pipe-separated contact line, blue
 uppercase section headers with hairline rules, single column, right-aligned
 dates -- and the .docx / .pdf exports mirror it so the download matches the
-preview.
+preview (the résumé stays white in both themes).
 
 ## How It Works
 
@@ -193,24 +203,21 @@ preview.
 
 ### Phase 4 -- AI writing assistant (Tencent Hunyuan 3 via OpenRouter)
 
-- `utils/ai_assistant.py` calls an OpenAI-compatible chat API (the `openai`
-  SDK pointed at OpenRouter, serving Tencent's `tencent/hy3:free`) and exposes
-  four features, surfaced in-context on the tabs/pages they relate to:
-  - **Professional summary** (Personal tab) -- drafts a 2-3 sentence
-    summary from the experience, projects, and skills you entered.
-  - **Bullet-point rewrite** (Experience tab, per role) -- tightens your saved
-    bullets into stronger, action-verb-led phrasing.
-  - **Project enhancement** (Projects tab, per project) -- polishes the
-    description and bullet points.
-  - **Resume suggestions** (ATS Match page) -- read-only, actionable advice on
-    the whole resume, tailored to the job description if one is entered.
+- **AI lives only on the ATS Match page**, not the Dashboard. Given your résumé
+  and the job description, it generates **apply-able changes** you review and
+  apply individually (`utils/ai_assistant.py`, OpenAI-compatible `openai` SDK
+  pointed at OpenRouter serving Tencent's `tencent/hy3:free`):
+  - **Tailored professional summary** -- a 2-3 sentence summary rebuilt from the
+    experience, projects, and skills you entered, tuned to the job. **Apply**
+    writes it into your résumé.
+  - **Tailored experience bullets** (per role) -- your saved bullets rewritten
+    into stronger, JD-relevant phrasing, preserving every fact. **Apply** per
+    role.
 - **Never fabricates.** A strict system prompt forbids inventing employers,
   dates, metrics, technologies, or skills; every function only rephrases
-  content you already provided. All output is shown as a **proposal you
-  explicitly accept or discard** -- nothing is written into your resume
-  silently. If a job description was entered on the ATS Match page, the
-  summary, bullets, and suggestions gently tailor emphasis toward it (still
-  without adding anything you didn't state).
+  content you already provided, tuned to the job description. Each change is a
+  **proposal you explicitly Apply or Dismiss** -- nothing is written into your
+  résumé silently.
 - **Why Hunyuan 3 via OpenRouter.** OpenRouter exposes an OpenAI-compatible
   endpoint, and Hunyuan 3 has a free tier (`tencent/hy3:free`), so the
   deployed app can run at no cost. Because it's OpenAI-compatible, `base URL`,
@@ -264,6 +271,9 @@ switch `OPENROUTER_MODEL` to `tencent/hy3` (paid) if you hit the limit.
   - **Remotive** -- a remote-only board with a public, no-auth API. Queried
     only for remote-inclusive searches so the page still returns results with
     no keys configured.
+- There's no results-count control: each search fetches a full batch (Adzuna's
+  50-per-page maximum plus Remotive's matches, merged and deduped) and the page
+  shows **10 per page** with Previous / Next and a "Page X of Y" indicator.
 - The page **only reads listings and shows their links** -- it never submits an
   application or sends anything on the user's behalf. All calls have timeouts
   and fail soft: if one source errors, the other still returns.

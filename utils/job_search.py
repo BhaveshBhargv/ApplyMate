@@ -28,6 +28,7 @@ import streamlit as st
 _ADZUNA_BASE = "https://api.adzuna.com/v1/api/jobs"
 _REMOTIVE_BASE = "https://remotive.com/api/remote-jobs"
 _TIMEOUT = 12  # seconds per request
+_MAX_RESULTS = 50  # Adzuna's per-page maximum; we fetch one full page and paginate client-side
 
 # Country code -> display name, for the picker. Adzuna scopes search by country.
 COUNTRIES = {
@@ -204,8 +205,12 @@ def _format_salary(country: str, lo, hi) -> str:
 
 
 def search_adzuna(title: str, location: str, country: str, work_type: str,
-                  limit: int, industry: str = "Any") -> Tuple[List[JobPosting], Optional[str]]:
-    """Query Adzuna. Returns (jobs, error_message-or-None)."""
+                  industry: str = "Any") -> Tuple[List[JobPosting], Optional[str]]:
+    """Query Adzuna. Returns (jobs, error_message-or-None).
+
+    Fetches a full batch (Adzuna's 50-per-page maximum) so the caller can
+    paginate client-side; there is no user-facing result limit.
+    """
     app_id, app_key = _adzuna_creds()
     if not (app_id and app_key):
         return [], None  # not configured -- caller handles the setup notice
@@ -220,7 +225,7 @@ def search_adzuna(title: str, location: str, country: str, work_type: str,
     params = {
         "app_id": app_id,
         "app_key": app_key,
-        "results_per_page": max(1, min(limit, 50)),
+        "results_per_page": _MAX_RESULTS,
         "what": what or "developer",
         "content-type": "application/json",
     }
@@ -282,9 +287,9 @@ def _is_relevant(job_title: str, category: str, tokens: List[str]) -> bool:
     return any(tok in haystack for tok in tokens)
 
 
-def search_remotive(title: str, limit: int, industry: str = "Any") -> Tuple[List[JobPosting], Optional[str]]:
+def search_remotive(title: str, industry: str = "Any") -> Tuple[List[JobPosting], Optional[str]]:
     """Query Remotive (remote-only, no auth). Returns (jobs, error-or-None)."""
-    params = {"search": title.strip(), "limit": max(1, min(limit, 50))}
+    params = {"search": title.strip()}
     category = _remotive_category(industry)
     if category:
         params["category"] = category
@@ -335,7 +340,7 @@ def _dedupe(jobs: List[JobPosting]) -> List[JobPosting]:
 
 
 def search_jobs(title: str, location: str, country: str, work_type: str,
-                limit: int = 15, industry: str = "Any") -> SearchResult:
+               industry: str = "Any") -> SearchResult:
     """Search enabled sources, merge, dedupe. Never raises -- errors become notices.
 
     Remotive (remote-only) is queried when the user wants remote work
@@ -345,16 +350,16 @@ def search_jobs(title: str, location: str, country: str, work_type: str,
     result = SearchResult(adzuna_configured=adzuna_configured())
     collected: List[JobPosting] = []
 
-    adzuna_jobs, adzuna_err = search_adzuna(title, location, country, work_type, limit, industry)
+    adzuna_jobs, adzuna_err = search_adzuna(title, location, country, work_type, industry=industry)
     collected += adzuna_jobs
     if adzuna_err:
         result.notices.append(adzuna_err)
 
     if work_type in ("Any", "Remote"):
-        remotive_jobs, remotive_err = search_remotive(title, limit, industry)
+        remotive_jobs, remotive_err = search_remotive(title, industry)
         collected += remotive_jobs
         if remotive_err:
             result.notices.append(remotive_err)
 
-    result.jobs = _dedupe(collected)[:limit * 2]
+    result.jobs = _dedupe(collected)
     return result

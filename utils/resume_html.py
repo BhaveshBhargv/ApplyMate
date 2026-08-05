@@ -148,6 +148,7 @@ def render_resume_html(resume: ResumeData) -> str:
   background: #c3c9d4; border-radius: 6px; border: 2px solid transparent; background-clip: content-box;
 }}
 .rb-scroll::-webkit-scrollbar-thumb:hover {{ background: #a8b0be; background-clip: content-box; }}
+@keyframes rb-doc-in {{ from {{ opacity: .85; }} to {{ opacity: 1; }} }}
 .rb-doc {{
   background: #fff; color: {_INK};
   font-family: "Calibri", "Carlito", "Segoe UI", system-ui, sans-serif;
@@ -155,7 +156,10 @@ def render_resume_html(resume: ResumeData) -> str:
   padding: 40px 44px; border-radius: 4px;
   box-shadow: 0 12px 30px rgba(22,35,62,.12), 0 2px 6px rgba(22,35,62,.08);
   border: 1px solid #eceff4;
+  /* Whisper-settle so a save reads as "the sheet refreshed", not a flash. */
+  animation: rb-doc-in .22s ease-out both;
 }}
+@media (prefers-reduced-motion: reduce) {{ .rb-doc {{ animation: none; }} }}
 .rb-doc .rb-name {{
   text-align: center; font-size: 25px; font-weight: 700;
   color: {_INK}; letter-spacing: .2px; margin-bottom: 4px;
