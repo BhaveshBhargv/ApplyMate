@@ -28,9 +28,11 @@ straight from the same résumé.
       (.docx) or PDF file (single column, standard headings, real bullets,
       no tables or graphics).
 - [x] **Job search** -- Search live openings by job title, location, work
-      type, industry, and country via free, official APIs (Adzuna + Remotive).
-      Each listing shows which of your skills it mentions and can be sent to
-      ATS Match in one click. Read-only: it only links to official postings.
+      type, industry, and country across **six free sources** (Adzuna, Remotive,
+      RemoteOK, We Work Remotely, and curated Greenhouse/Lever company boards),
+      fetched in parallel, deduped, and ranked by **match score** + **freshness**.
+      Each listing can be sent to ATS Match in one click. Read-only: it only
+      links to official postings.
 
 ## Tech Stack
 
@@ -65,7 +67,7 @@ resume-builder/
 │   ├── resume_parser.py    # Best-effort .pdf/.docx/.txt resume text extraction + parsing
 │   ├── ats_analyzer.py     # JD keyword extraction + resume match scoring
 │   ├── ai_assistant.py     # OpenRouter/Hunyuan client + never-invent prompts (summary/bullets/suggestions)
-│   ├── job_search.py       # Job search across Adzuna (keyed) + Remotive (no key), merged & deduped
+│   ├── job_search.py       # Job search: Adzuna + Remotive + RemoteOK + WWR + Greenhouse/Lever boards (parallel, cached, deduped)
 │   ├── docx_export.py      # ATS-friendly Word (.docx) export (matches the preview format)
 │   └── pdf_export.py       # ATS-friendly PDF export (matches the preview format)
 ├── pages/
@@ -260,23 +262,33 @@ switch `OPENROUTER_MODEL` to `tencent/hy3` (paid) if you hit the limit.
   role. Industry maps to each source's own category taxonomy (`INDUSTRIES` in
   `utils/job_search.py`), so "Data & Analytics", "Design", "Finance & Legal",
   etc. narrow both Adzuna and Remotive where each has a matching category.
-- Each card shows which of **your skills** the listing mentions (green chips) --
-  a positive-only signal, since a truncated description can only hide a match,
-  never invent one. For the full matched-vs-missing breakdown, **🎯 Match in ATS**
-  loads that job's description into the ATS Match page in one click.
-- Two free, official, legal-to-use APIs back it (`utils/job_search.py`), merged
-  and deduplicated:
-  - **Adzuna** -- a global aggregator (needs free keys). Covers on-site, hybrid
-    and remote roles across many countries, with an apply link per posting.
-  - **Remotive** -- a remote-only board with a public, no-auth API. Queried
-    only for remote-inclusive searches so the page still returns results with
-    no keys configured.
-- There's no results-count control: each search fetches a full batch (Adzuna's
-  50-per-page maximum plus Remotive's matches, merged and deduped) and the page
-  shows **10 per page** with Previous / Next and a "Page X of Y" indicator.
+- Each card shows a **match score** (how well the job fits your résumé), a
+  **freshness** label (how recently it was posted), the **source**, and chips for
+  which of **your skills** the listing mentions. Results are **sorted by best
+  match, then freshest**. For the full matched-vs-missing breakdown, **Match in
+  ATS** loads that job's description into the ATS Match page in one click.
+  - *Match score* is skill-overlap over the job's title + description, normalised
+    so matching ~5 of your skills counts as a full match (users with long skill
+    lists aren't penalised). It's positive-only -- an absent description can hide
+    a match but never invent one -- so company-board jobs (no description) match
+    on title and tend to score lower.
+- **Six free, official, legal-to-use sources** back it (`utils/job_search.py`),
+  fetched **in parallel** (thread-safe 30-min cache), merged and **deduplicated**
+  (normalised title + company; the richer/fresher copy wins):
+  - **Adzuna** -- global aggregator (needs free keys), searchable by keyword.
+  - **Remotive**, **RemoteOK**, **We Work Remotely** -- remote-only boards with
+    public no-auth APIs / RSS; queried for Any/Remote searches.
+  - **Company ATS boards** -- a curated list of well-known companies whose jobs
+    are hosted on **Greenhouse** or **Lever** (edit `_GREENHOUSE` / `_LEVER` in
+    `job_search.py`). No free API searches *all* ATS boards, so a fixed set is
+    pulled and filtered by title. Queried for every work type.
+- There's no results-count control: each search fetches full batches from every
+  source, scores + sorts them, keeps the strongest ~120, and paginates **10 per
+  page** with Previous / Next and a "Page X / Y" indicator.
 - The page **only reads listings and shows their links** -- it never submits an
-  application or sends anything on the user's behalf. All calls have timeouts
-  and fail soft: if one source errors, the other still returns.
+  application or sends anything on the user's behalf. All calls have timeouts and
+  fail soft: if a source errors the others still return (ATS boards fail silently
+  as a best-effort supplement).
 
 **Job search setup (optional -- widens results).** Remote results work with no
 keys. To also get on-site / hybrid / location-based roles, add free Adzuna keys:

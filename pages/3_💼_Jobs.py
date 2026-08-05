@@ -11,7 +11,14 @@ from html import escape
 import streamlit as st
 
 from utils import job_search
-from utils.job_search import COUNTRIES, INDUSTRIES, WORK_TYPES, search_jobs, skills_in_text
+from utils.job_search import (
+    COUNTRIES,
+    INDUSTRIES,
+    WORK_TYPES,
+    posted_days,
+    search_jobs,
+    skills_in_text,
+)
 from utils.session_manager import get_resume_data, init_session_state, set_job_description
 from utils.theme import inject_theme, render_download_footer, render_header, render_hero
 
@@ -40,14 +47,40 @@ PAGE_SIZE = 10
 
 def run_search(title: str, location: str, country: str, work_type: str,
                industry: str = "Any") -> None:
-    """Fetch a full batch of jobs, tag each with matching résumé skills, reset paging."""
+    """Fetch jobs, score each for résumé match + freshness, sort, reset paging."""
     result = search_jobs(title, location, country, work_type, industry)
     my_skills = resume.all_skills_flat()
-    if my_skills:
-        for job in result.jobs:
-            job.matched_skills = skills_in_text(my_skills, job.description)
+    # Matching 5+ of your skills counts as a full match, so users with long skill
+    # lists aren't penalised. Score is skill-overlap over title + description.
+    target = max(1, min(len(my_skills), 5))
+    for job in result.jobs:
+        if my_skills:
+            job.matched_skills = skills_in_text(my_skills, f"{job.title} {job.description}")
+            job.match_score = min(100, round(100 * len(job.matched_skills) / target))
+        job.freshness_days = posted_days(job.posted)
+
+    # Best matches first; ties broken by freshest. Jobs with no score sink.
+    result.jobs.sort(key=lambda j: (
+        -(j.match_score if j.match_score is not None else -1),
+        j.freshness_days if j.freshness_days is not None else 10**6,
+    ))
+    result.jobs = result.jobs[:120]  # keep the strongest ~12 pages
     st.session_state["job_results"] = result
     st.session_state["job_page"] = 0
+
+
+def _freshness_label(days) -> str:
+    if days is None:
+        return ""
+    if days <= 0:
+        return "today"
+    if days == 1:
+        return "1d ago"
+    if days < 30:
+        return f"{days}d ago"
+    if days < 365:
+        return f"{days // 30}mo ago"
+    return "1y+ ago"
 
 
 # Auto-search handoff from the Dashboard's "Search jobs for this résumé" button.
@@ -108,10 +141,17 @@ if result is not None:
             '.rb-job-title{font-family:var(--display);font-weight:700;font-size:1.05rem;'
             'letter-spacing:-.02em;color:var(--text);line-height:1.2;}'
             '.rb-job-co{color:var(--muted);font-weight:500;font-size:.88rem;margin-top:2px;}'
-            '.rb-badge{flex:none;font-family:var(--mono);font-size:.6rem;font-weight:500;letter-spacing:.12em;'
-            'text-transform:uppercase;padding:3px 8px;border-radius:6px;border:1px solid var(--line);color:var(--muted);}'
+            '.rb-tags{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none;}'
+            '.rb-badge{font-family:var(--mono);font-size:.6rem;font-weight:500;letter-spacing:.12em;'
+            'text-transform:uppercase;padding:3px 8px;border-radius:6px;border:1px solid var(--line);color:var(--muted);white-space:nowrap;}'
             '.rb-badge.adzuna{color:var(--accent-ink);border-color:var(--chip-border);background:var(--wash);}'
+            '.rb-match{font-family:var(--mono);font-size:.64rem;font-weight:600;letter-spacing:.04em;'
+            'padding:3px 8px;border-radius:6px;white-space:nowrap;}'
+            '.rb-match.hi{color:#fff;background:var(--accent);border:1px solid var(--accent);}'
+            '.rb-match.mid{color:var(--accent-ink);background:var(--wash);border:1px solid var(--chip-border);}'
+            '.rb-match.lo{color:var(--muted);border:1px solid var(--line);}'
             '.rb-job-meta{font-family:var(--mono);margin-top:9px;color:var(--muted);font-size:.75rem;letter-spacing:.01em;}'
+            '.rb-job-meta .rb-fresh{color:var(--accent-ink);font-weight:600;}'
             '.rb-skills{display:flex;flex-wrap:wrap;gap:6px;margin-top:11px;align-items:center;}'
             '.rb-skills-lbl{font-family:var(--mono);font-size:.62rem;font-weight:500;color:var(--muted);'
             'letter-spacing:.12em;text-transform:uppercase;}'
@@ -132,15 +172,21 @@ if result is not None:
                     f'{total} openings &middot; showing {start + 1}–{start + len(page_jobs)}</p>',
                     unsafe_allow_html=True)
         if resume.all_skills_flat():
-            st.caption("The chips show which of **your skills** each listing mentions. "
-                       "For a full matched-vs-missing breakdown, use **Match in ATS**.")
+            st.caption("Sorted by **best match** to your résumé, then **freshest**. Chips show your "
+                       "skills each listing mentions; for a full breakdown use **Match in ATS**.")
         else:
-            st.caption("Add skills on the Dashboard to see which of your skills each listing mentions.")
+            st.caption("Sorted by **freshest** first. Add skills on the Dashboard to rank by how well "
+                       "each listing matches you.")
 
         for offset, job in enumerate(page_jobs):
             i = start + offset
             with st.container(border=True):
-                badge_cls = "adzuna" if job.source == "Adzuna" else "remotive"
+                badge_cls = "adzuna" if job.source == "Adzuna" else ""
+
+                match_html = ""
+                if job.match_score is not None:
+                    tier = "hi" if job.match_score >= 60 else "mid" if job.match_score >= 30 else "lo"
+                    match_html = f'<span class="rb-match {tier}">{job.match_score}% match</span>'
 
                 meta = []
                 if job.location:
@@ -149,7 +195,11 @@ if result is not None:
                     meta.append(escape(job.salary))
                 if job.job_type:
                     meta.append(escape(job.job_type.title()))
-                if job.posted:
+                fresh = _freshness_label(job.freshness_days)
+                if fresh:
+                    css = "rb-fresh" if (job.freshness_days is not None and job.freshness_days <= 7) else ""
+                    meta.append(f'<span class="{css}">{escape(fresh)}</span>')
+                elif job.posted:
                     meta.append(escape(job.posted))
                 meta_html = " · ".join(meta)
 
@@ -166,7 +216,8 @@ if result is not None:
                     '<div class="rb-job-top"><div>'
                     f'<div class="rb-job-title">{escape(job.title)}</div>'
                     f'<div class="rb-job-co">{escape(job.company) or "—"}</div></div>'
-                    f'<span class="rb-badge {badge_cls}">{escape(job.source)}</span>'
+                    f'<div class="rb-tags">{match_html}'
+                    f'<span class="rb-badge {badge_cls}">{escape(job.source)}</span></div>'
                     '</div>'
                     f'<div class="rb-job-meta">{meta_html}</div>'
                     f'{skills_html}',
