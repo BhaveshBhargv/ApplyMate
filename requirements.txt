@@ -1,25 +1,27 @@
-# Phase 1 -- form UI and data models
-streamlit>=1.38
-pandas>=2.2.3
+# ApplyMate -- runtime dependencies.
+# Only packages the app actually imports are listed; the Python standard library
+# and transitive deps (e.g. numpy / scipy via scikit-learn) are omitted.
 
-# Phase 2 -- resume upload/parsing (reads existing .pdf/.docx resumes)
+# UI framework. The app relies on st.navigation / st.Page, the width="stretch"
+# widget sizing, st.container(border=...), and st-key-* element classes, all of
+# which require a recent Streamlit.
+streamlit==1.49.0
+
+# Résumé upload/parsing (.pdf / .docx / .txt) + Word (.docx) export
 pypdf>=4.3.0
 python-docx>=1.1.2
 
-# Phase 3 -- job description parsing / ATS matching
+# ATS keyword match -- TF-IDF + cosine similarity (pulls in numpy / scipy).
+# scikit-learn replaces the originally-planned spaCy, which needs a ~12MB model
+# downloaded at runtime; TF-IDF + a rule-based extractor is more robust here.
 scikit-learn>=1.5.1
-# spaCy is listed in the original stack but needs a ~12MB model downloaded at
-# runtime; Phase 3 uses scikit-learn (TF-IDF) plus a rule-based keyword
-# extractor instead, which is more robust in a sandboxed environment.
-# spacy>=3.7.5
 
-# Phase 4 -- AI rewriting via Tencent Hunyuan 3 (tencent/hy3:free) through
-# OpenRouter's OpenAI-compatible API. The openai SDK is the client; base URL,
-# model, and key are configurable so any OpenAI-compatible endpoint works.
+# AI tailoring on the ATS Match page -- OpenAI-compatible client used against
+# OpenRouter (Tencent hy3). Base URL / model / key are all configurable.
 openai>=1.40.0
 
-# Document export -- Word (python-docx, above) and PDF (reportlab)
+# PDF export
 reportlab>=4.2.2
 
-# Job search -- HTTP calls to the Adzuna and Remotive job APIs
+# Job search -- Adzuna + Remotive HTTP APIs
 requests>=2.31.0

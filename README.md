@@ -34,7 +34,7 @@ straight from the same résumé.
 
 ## Tech Stack
 
-Python, Streamlit, pypdf, python-docx, reportlab, pandas, scikit-learn,
+Python, Streamlit, pypdf, python-docx, reportlab, scikit-learn,
 requests (Adzuna + Remotive job APIs), and openai (used as an
 OpenAI-compatible client for OpenRouter). Two deviations
 from the originally-listed stack, each explained in its phase notes below:
