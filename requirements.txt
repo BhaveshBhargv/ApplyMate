@@ -1,6 +1,7 @@
 # ApplyMate -- runtime dependencies.
 # Only packages the app actually imports are listed; the Python standard library
-# and transitive deps (e.g. numpy / scipy via scikit-learn) are omitted.
+# is omitted. The app stays deliberately light -- no torch, no local ML model --
+# so it deploys cleanly on the Streamlit Cloud free tier.
 
 # UI framework. The app relies on st.navigation / st.Page, the width="stretch"
 # widget sizing, st.container(border=...), and st-key-* element classes, all of
@@ -11,13 +12,14 @@ streamlit==1.49.0
 pypdf>=4.3.0
 python-docx>=1.1.2
 
-# ATS keyword match -- TF-IDF + cosine similarity (pulls in numpy / scipy).
-# scikit-learn replaces the originally-planned spaCy, which needs a ~12MB model
-# downloaded at runtime; TF-IDF + a rule-based extractor is more robust here.
-scikit-learn>=1.5.1
-
-# AI tailoring on the ATS Match page -- OpenAI-compatible client used against
-# OpenRouter (Tencent hy3). Base URL / model / key are all configurable.
+# AI + semantic matching, both via the same OpenAI-compatible client:
+#   * Chat (résumé tailoring) runs against OpenRouter -- base URL / model / key
+#     are configurable (OPENROUTER_*).
+#   * Embeddings (ATS match breakdown + RAG retrieval) run against any
+#     OpenAI-compatible embeddings endpoint (EMBEDDINGS_*); the default is
+#     Google Gemini's free tier (text-embedding-004), so semantic matching
+#     costs nothing. Cosine/vector math is pure Python, so no
+#     numpy/scipy/scikit-learn is needed, and the lexical fallback is stdlib-only.
 openai>=1.40.0
 
 # PDF export

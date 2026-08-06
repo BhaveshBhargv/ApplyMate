@@ -2,15 +2,16 @@
 
 Inputs (job title, location, work type, country) are sent to free, official job
 APIs via utils.job_search. Results are shown as cards, each linking to the real
-posting. Each card also shows how well the résumé being built matches that job,
-and a one-click handoff loads the job's description into ATS Match for a full
-breakdown. Nothing is applied to or sent on the user's behalf -- links only.
+posting. Each card lists which of the job's named skills the résumé already
+covers and which are missing, and a one-click handoff loads the job's full
+description into ATS Match for a semantic breakdown. Nothing is applied to or
+sent on the user's behalf -- links only.
 """
 from html import escape
 
 import streamlit as st
 
-from utils import job_search
+from utils import ats_analyzer, job_search
 from utils.job_search import (
     COUNTRIES,
     INDUSTRIES,
@@ -47,21 +48,23 @@ PAGE_SIZE = 10
 
 def run_search(title: str, location: str, country: str, work_type: str,
                industry: str = "Any") -> None:
-    """Fetch jobs, score each for résumé match + freshness, sort, reset paging."""
+    """Fetch jobs; per job, split its named skills into matched vs missing; sort."""
     result = search_jobs(title, location, country, work_type, industry)
-    my_skills = resume.all_skills_flat()
-    # Matching 5+ of your skills counts as a full match, so users with long skill
-    # lists aren't penalised. Score is skill-overlap over title + description.
-    target = max(1, min(len(my_skills), 5))
+    has_resume = bool(resume_text.strip())
     for job in result.jobs:
-        if my_skills:
-            job.matched_skills = skills_in_text(my_skills, f"{job.title} {job.description}")
-            job.match_score = min(100, round(100 * len(job.matched_skills) / target))
+        # The job's own named skills (from its title + description), then split by
+        # what the résumé already covers. On short/absent descriptions (e.g. an
+        # Adzuna snippet) this is naturally sparse -- honest, not inflated.
+        jd_skills = ats_analyzer.extract_keywords(f"{job.title} {job.description}", max_keywords=12)
+        if has_resume:
+            job.matched_skills = skills_in_text(jd_skills, resume_text)
+            covered = {s.lower() for s in job.matched_skills}
+            job.missing_skills = [s for s in jd_skills if s.lower() not in covered]
         job.freshness_days = posted_days(job.posted)
 
-    # Best matches first; ties broken by freshest. Jobs with no score sink.
+    # Most of your skills covered first; ties broken by freshest.
     result.jobs.sort(key=lambda j: (
-        -(j.match_score if j.match_score is not None else -1),
+        -len(j.matched_skills),
         j.freshness_days if j.freshness_days is not None else 10**6,
     ))
     result.jobs = result.jobs[:120]  # keep the strongest ~12 pages
@@ -145,18 +148,15 @@ if result is not None:
             '.rb-badge{font-family:var(--mono);font-size:.6rem;font-weight:500;letter-spacing:.12em;'
             'text-transform:uppercase;padding:3px 8px;border-radius:6px;border:1px solid var(--line);color:var(--muted);white-space:nowrap;}'
             '.rb-badge.adzuna{color:var(--accent-ink);border-color:var(--chip-border);background:var(--wash);}'
-            '.rb-match{font-family:var(--mono);font-size:.64rem;font-weight:600;letter-spacing:.04em;'
-            'padding:3px 8px;border-radius:6px;white-space:nowrap;}'
-            '.rb-match.hi{color:#fff;background:var(--accent);border:1px solid var(--accent);}'
-            '.rb-match.mid{color:var(--accent-ink);background:var(--wash);border:1px solid var(--chip-border);}'
-            '.rb-match.lo{color:var(--muted);border:1px solid var(--line);}'
             '.rb-job-meta{font-family:var(--mono);margin-top:9px;color:var(--muted);font-size:.75rem;letter-spacing:.01em;}'
             '.rb-job-meta .rb-fresh{color:var(--accent-ink);font-weight:600;}'
-            '.rb-skills{display:flex;flex-wrap:wrap;gap:6px;margin-top:11px;align-items:center;}'
+            '.rb-skills{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px;align-items:center;}'
             '.rb-skills-lbl{font-family:var(--mono);font-size:.62rem;font-weight:500;color:var(--muted);'
-            'letter-spacing:.12em;text-transform:uppercase;}'
+            'letter-spacing:.12em;text-transform:uppercase;min-width:58px;}'
             '.rb-chip{font-size:.72rem;font-weight:500;color:var(--accent-ink);background:var(--wash);'
             'border:1px solid var(--chip-border);border-radius:6px;padding:2px 8px;}'
+            '.rb-chip-miss{font-size:.72rem;font-weight:500;color:var(--gap);background:#FFF1F2;'
+            'border:1px solid #FECDD3;border-radius:6px;padding:2px 8px;}'
             '.rb-chip-more{font-family:var(--mono);font-size:.68rem;color:var(--muted);}'
             '</style>',
             unsafe_allow_html=True,
@@ -171,22 +171,18 @@ if result is not None:
         st.markdown(f'<p class="rb-eyebrow" style="margin-top:.6rem">'
                     f'{total} openings &middot; showing {start + 1}–{start + len(page_jobs)}</p>',
                     unsafe_allow_html=True)
-        if resume.all_skills_flat():
-            st.caption("Sorted by **best match** to your résumé, then **freshest**. Chips show your "
-                       "skills each listing mentions; for a full breakdown use **Match in ATS**.")
+        if resume_text.strip():
+            st.caption("Sorted by **most skills covered**, then **freshest**. Green chips are the job's "
+                       "skills you already have; red are ones it names that you don't. For the full "
+                       "semantic breakdown use **Match in ATS**.")
         else:
-            st.caption("Sorted by **freshest** first. Add skills on the Dashboard to rank by how well "
-                       "each listing matches you.")
+            st.caption("Sorted by **freshest** first. Fill in your résumé on the Dashboard to see which "
+                       "of each job's skills you match and which are missing.")
 
         for offset, job in enumerate(page_jobs):
             i = start + offset
             with st.container(border=True):
                 badge_cls = "adzuna" if job.source == "Adzuna" else ""
-
-                match_html = ""
-                if job.match_score is not None:
-                    tier = "hi" if job.match_score >= 60 else "mid" if job.match_score >= 30 else "lo"
-                    match_html = f'<span class="rb-match {tier}">{job.match_score}% match</span>'
 
                 meta = []
                 if job.location:
@@ -203,20 +199,24 @@ if result is not None:
                     meta.append(escape(job.posted))
                 meta_html = " · ".join(meta)
 
-                skills_html = ""
-                if job.matched_skills:
-                    shown = job.matched_skills[:5]
-                    chips = "".join(f'<span class="rb-chip">{escape(s)}</span>' for s in shown)
-                    extra = len(job.matched_skills) - len(shown)
-                    more = f'<span class="rb-chip-more">+{extra} more</span>' if extra > 0 else ""
-                    skills_html = ('<div class="rb-skills"><span class="rb-skills-lbl">Your skills</span>'
-                                   f'{chips}{more}</div>')
+                def _skill_row(label: str, skills: list, chip_cls: str) -> str:
+                    if not skills:
+                        return ""
+                    shown = skills[:6]
+                    chips = "".join(f'<span class="{chip_cls}">{escape(s)}</span>' for s in shown)
+                    extra = len(skills) - len(shown)
+                    more = f'<span class="rb-chip-more">+{extra}</span>' if extra > 0 else ""
+                    return (f'<div class="rb-skills"><span class="rb-skills-lbl">{label}</span>'
+                            f'{chips}{more}</div>')
+
+                skills_html = (_skill_row("Matches", job.matched_skills, "rb-chip")
+                               + _skill_row("Missing", job.missing_skills, "rb-chip-miss"))
 
                 st.markdown(
                     '<div class="rb-job-top"><div>'
                     f'<div class="rb-job-title">{escape(job.title)}</div>'
                     f'<div class="rb-job-co">{escape(job.company) or "—"}</div></div>'
-                    f'<div class="rb-tags">{match_html}'
+                    f'<div class="rb-tags">'
                     f'<span class="rb-badge {badge_cls}">{escape(job.source)}</span></div>'
                     '</div>'
                     f'<div class="rb-job-meta">{meta_html}</div>'
@@ -228,9 +228,10 @@ if result is not None:
                 link = _safe_link(job.url)
                 if link:
                     a.link_button("View & apply", link, width="stretch")
-                if resume_text.strip() and job.description:
+                if resume_text.strip() and (job.description or link):
                     if b.button("Match in ATS", key=f"match_{i}", width="stretch"):
-                        set_job_description(job.description)
+                        with st.spinner("Loading the full job description..."):
+                            set_job_description(job_search.fetch_full_description(job))
                         st.switch_page("pages/2_🎯_ATS_Match.py")
 
         # --- Pager ---------------------------------------------------------

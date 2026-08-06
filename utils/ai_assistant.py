@@ -157,6 +157,26 @@ def _parse_bullets(text: str) -> List[str]:
     return bullets
 
 
+def _parse_numbered(text: str, n: int) -> Optional[List[str]]:
+    """Pull exactly `n` items out of a `1. ... 2. ...` numbered response.
+
+    The Writer is asked to return one rewritten bullet per numbered line, in the
+    same order as the input. This keeps each rewrite aligned to the bullet (and
+    therefore the JD requirement) it came from. Returns None if the model didn't
+    return the expected count, so the caller can fall back to the originals
+    rather than mis-pairing evidence.
+    """
+    items: List[str] = []
+    for line in text.splitlines():
+        stripped = line.strip().lstrip("-*•").strip()
+        m = re.match(r"^(\d+)[.)]\s*(.+)$", stripped)
+        if m:
+            items.append(m.group(2).strip())
+    if len(items) == n:
+        return items
+    return None
+
+
 def _jd_clause(jd: str) -> str:
     """Optional instruction to gently tailor wording toward a target job."""
     if not jd.strip():
@@ -265,6 +285,49 @@ def enhance_project(
             if cleaned:
                 new_bullets.append(cleaned)
     return new_description, (new_bullets or bullets)
+
+
+def tailor_bullets(pairs: List[Tuple[str, str]]) -> List[str]:
+    """Rewrite existing bullets to emphasise the JD aspect each one supports.
+
+    This is the LLM half of the evidence-based Writer agent. `pairs` is a list
+    of (original_bullet, jd_requirement): the retriever has already decided
+    *which* resume bullet best answers *which* JD requirement, so the model's
+    only job is to rephrase that bullet to foreground the relevant angle --
+    never to invent skills, tools, or metrics the bullet doesn't already state.
+
+    Returns one rewrite per input, in the same order (so the caller can keep
+    each rewrite bound to its evidence). On any parsing/count mismatch it falls
+    back to the original bullets, so a bad response degrades to a no-op rather
+    than mis-attributing changes.
+    """
+    if not pairs:
+        return []
+    originals = [p[0] for p in pairs]
+    lines = []
+    for i, (bullet, requirement) in enumerate(pairs, 1):
+        emphasis = requirement.strip() or "general relevance to the role"
+        lines.append(f"{i}. ORIGINAL: {bullet.strip()} || EMPHASIS (from job description): {emphasis}")
+    numbered = "\n".join(lines)
+    prompt = (
+        f"Rewrite each of the following {len(pairs)} resume bullet points so it better "
+        "emphasises the EMPHASIS aspect drawn from the target job description, while "
+        "keeping every factual detail (tools, numbers, outcomes, technologies) exactly "
+        "as written in the ORIGINAL. Do NOT add any skill, tool, metric, or achievement "
+        "that is not already in the ORIGINAL -- if the emphasis asks for something the "
+        "bullet doesn't contain, just improve the wording without inventing it. Start "
+        "each rewrite with a strong action verb.\n\n"
+        "Return EXACTLY one rewritten bullet per line, numbered 1 to "
+        f"{len(pairs)} in the same order, with no other text.\n\n"
+        f"ITEMS:\n{numbered}"
+    )
+    text = _generate(prompt, temperature=0.4)
+    parsed = _parse_numbered(text, len(pairs))
+    if parsed is None:
+        # Last resort: try a loose bullet parse; only use it if the count lines up.
+        loose = _parse_bullets(text)
+        parsed = loose if len(loose) == len(pairs) else originals
+    return parsed
 
 
 def suggest_improvements(resume: ResumeData, jd: str = "") -> str:

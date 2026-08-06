@@ -1,12 +1,24 @@
-"""ATS Match: score the résumé against a job description, and get AI suggestions.
+"""ATS Match: semantic résumé/JD scoring + evidence-based AI tailoring.
 
-Analysis only -- it reports matched vs missing keywords and read-only advice.
-It never edits the résumé or invents skills; "missing" keywords are shown as
-information ("add these only if you genuinely have them").
+Two halves, both grounded and honest:
+
+  * The breakdown -- an embedding-based match report: overall %, which skills
+    matched vs are missing, how well experience covers the JD's responsibilities
+    (with the supporting bullet), and whether education meets the requirement.
+    "Missing" is information, never a prompt to fabricate.
+
+  * The suggestions -- an agent pipeline (retrieve -> evidence -> write) turns the
+    report into apply-able cards: each one names the JD requirement that caused
+    it, the exact résumé bullet it edits, and a confidence. The AI only rephrases
+    bullets you already wrote; it never invents skills, tools, or metrics.
 """
+from html import escape
+
 import streamlit as st
 
+from utils import agents
 from utils import ai_assistant as ai
+from utils import ats_analyzer, embeddings
 from utils.ats_analyzer import analyze
 from utils.resume_parser import extract_text
 from utils.session_manager import (
@@ -22,17 +34,174 @@ inject_theme()
 render_header("ats")
 init_session_state()
 resume = get_resume_data()
-resume_text = resume.searchable_text()
+
+# --- Page-local styling (breakdown tiles, chips, evidence, suggestion cards) ---
+st.markdown(
+    """
+<style>
+.rb-score { display:flex; align-items:baseline; gap:.7rem; margin:.2rem 0 .1rem; }
+.rb-score-num { font-family:var(--mono); font-weight:600; font-size:3.1rem; line-height:1;
+  color:var(--text); letter-spacing:-.03em; font-feature-settings:"tnum"; }
+.rb-score-pct { font-family:var(--mono); font-size:1.1rem; color:var(--muted); }
+.rb-score-verdict { font-size:.92rem; color:var(--muted); margin:.1rem 0 .2rem; }
+.rb-tiles { display:grid; grid-template-columns:repeat(3,1fr); gap:.7rem; margin:.4rem 0 .2rem; }
+.rb-tile { border:1px solid var(--line); border-radius:12px; background:var(--surface); padding:.7rem .8rem; }
+.rb-tile-label { font-family:var(--mono); font-size:.6rem; font-weight:500; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--muted); margin:0 0 .35rem; }
+.rb-tile-num { font-family:var(--mono); font-weight:600; font-size:1.5rem; color:var(--text);
+  font-feature-settings:"tnum"; line-height:1; }
+.rb-tile-num.na { color:var(--subtle); font-size:1.05rem; }
+.rb-bar { height:5px; border-radius:99px; background:var(--line); margin-top:.5rem; overflow:hidden; }
+.rb-bar > i { display:block; height:100%; border-radius:99px; background:var(--accent);
+  animation:rb-fill .5s var(--ease) both; }
+@keyframes rb-fill { from{ transform:scaleX(0); transform-origin:left; } to{ transform:scaleX(1); } }
+.rb-tile-note { font-size:.74rem; color:var(--muted); margin:.4rem 0 0; line-height:1.4; }
+.rb-chips { display:flex; flex-wrap:wrap; gap:.4rem; margin:.2rem 0 .1rem; }
+.rb-chip-ok, .rb-chip-miss { font-family:var(--mono); font-size:.74rem; font-weight:500;
+  padding:.2rem .55rem; border-radius:7px; letter-spacing:-.01em; }
+.rb-chip-ok { background:var(--wash); border:1px solid var(--chip-border); color:var(--accent-ink); }
+.rb-chip-miss { background:#FFF1F2; border:1px solid #FECDD3; color:var(--gap); }
+.rb-ev { border-top:1px solid var(--line); padding:.55rem 0 .1rem; }
+.rb-ev:first-child { border-top:0; }
+.rb-ev-req { font-size:.85rem; color:var(--text); font-weight:500; }
+.rb-ev-sim { font-family:var(--mono); font-size:.68rem; color:var(--muted); float:right; }
+.rb-ev-bullet { font-size:.8rem; color:var(--muted); margin:.2rem 0 0; padding-left:.8rem;
+  border-left:2px solid var(--chip-border); line-height:1.45; }
+.rb-ev-bullet.none { border-left-color:#FECDD3; color:var(--subtle); font-style:italic; }
+/* Suggestion cards */
+.rb-sg-badge { display:inline-block; font-family:var(--mono); font-size:.6rem; font-weight:600;
+  letter-spacing:.1em; text-transform:uppercase; padding:.16rem .5rem; border-radius:6px; }
+.rb-sg-badge.hi { background:var(--wash); border:1px solid var(--chip-border); color:var(--accent-ink); }
+.rb-sg-badge.mid { background:#F4F4F5; border:1px solid var(--line); color:var(--text); }
+.rb-sg-badge.lo { background:transparent; border:1px solid var(--line); color:var(--muted); }
+.rb-sg-because { font-size:.78rem; color:var(--muted); margin:.5rem 0 .1rem; }
+.rb-sg-because b { color:var(--text); font-weight:600; }
+.rb-sg-target { font-family:var(--mono); font-size:.66rem; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--muted); margin:.45rem 0 .3rem; }
+.rb-sg-old { font-size:.82rem; color:var(--subtle); text-decoration:line-through;
+  text-decoration-color:#FECDD3; line-height:1.5; margin:0 0 .25rem; }
+.rb-sg-new { font-size:.9rem; color:var(--text); line-height:1.55; padding-left:.7rem;
+  border-left:2px solid var(--accent); }
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
 render_hero("Match & tailor", "Match your résumé to a job",
-            "Paste a job description to see which keywords your résumé covers — then let AI tailor it.")
+            "Paste a job description for a semantic match breakdown — skills, experience, and "
+            "education — then apply evidence-based AI edits to your own bullets.")
 
-if not resume_text.strip():
+if not resume.searchable_text().strip():
     st.info("Your résumé is empty. Fill it in on the Dashboard first, then come back.")
     render_download_footer(resume)
     st.stop()
 
-# --- Job description input ----------------------------------------------------
+
+# --- Helpers ------------------------------------------------------------------
+
+def _bar(pct: int) -> str:
+    return f'<div class="rb-bar"><i style="width:{max(0, min(100, pct))}%"></i></div>'
+
+
+def _tile(label: str, score: "ats_analyzer.SectionScore | int", *, specified: bool = True) -> str:
+    """One sub-score tile. Shows n/a when the JD doesn't specify the section."""
+    if isinstance(score, ats_analyzer.SectionScore):
+        specified, value = score.specified, score.score
+    else:
+        value = int(score)
+    if not specified:
+        return (f'<div class="rb-tile"><p class="rb-tile-label">{escape(label)}</p>'
+                f'<div class="rb-tile-num na">n/a</div>'
+                f'<p class="rb-tile-note">Not specified in this job.</p></div>')
+    return (f'<div class="rb-tile"><p class="rb-tile-label">{escape(label)}</p>'
+            f'<div class="rb-tile-num">{value}<span style="font-size:.9rem;color:var(--muted)">%</span></div>'
+            f'{_bar(value)}</div>')
+
+
+def _render_report(report: "ats_analyzer.MatchReport") -> None:
+    # Overall score + verdict
+    if report.overall >= 70:
+        verdict = "Strong match — your résumé already speaks to most of this job."
+    elif report.overall >= 45:
+        verdict = "Moderate match — the breakdown below shows where to strengthen it."
+    else:
+        verdict = "Low match — see which skills and responsibilities are light."
+    st.markdown(
+        f'<div class="rb-score"><span class="rb-score-num">{report.overall}'
+        f'<span class="rb-score-pct">%</span></span></div>'
+        f'<p class="rb-score-verdict">{escape(verdict)}</p>',
+        unsafe_allow_html=True,
+    )
+    if not report.semantic:
+        st.caption("Keyword-based estimate. Add a free `EMBEDDINGS_API_KEY` (Gemini) for synonym-aware semantic matching.")
+
+    # Sub-score tiles: a skills-coverage %, experience match, education match
+    skills_pct = (round(len(report.skills_matched) / report.skills_total * 100)
+                  if report.skills_total else 0)
+    st.markdown(
+        '<div class="rb-tiles">'
+        + _tile("Skills coverage", skills_pct, specified=report.skills_total > 0)
+        + _tile("Experience match", report.experience)
+        + _tile("Education match", report.education)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    # Skills matched / missing
+    st.markdown(f"###### Skills matched ({len(report.skills_matched)})")
+    if report.skills_matched:
+        chips = "".join(
+            f'<span class="rb-chip-ok" title="matches your: {escape(m.resume_skill)}">{escape(m.jd_skill)}</span>'
+            for m in report.skills_matched
+        )
+        st.markdown(f'<div class="rb-chips">{chips}</div>', unsafe_allow_html=True)
+    else:
+        st.caption("None of the job's named skills were found in your résumé.")
+
+    st.markdown(f"###### Skills missing ({len(report.skills_missing)})")
+    if report.skills_missing:
+        chips = "".join(f'<span class="rb-chip-miss">{escape(s)}</span>' for s in report.skills_missing)
+        st.markdown(f'<div class="rb-chips">{chips}</div>', unsafe_allow_html=True)
+        st.caption("In the job, not in your résumé. Add them **only if you genuinely have them** — "
+                   "the app never fabricates skills.")
+    else:
+        st.caption("Every named skill in the job is already covered.")
+
+    # Experience evidence: JD responsibility -> best supporting bullet
+    evidence = [m for m in report.requirement_matches if m.best_bullet][:5]
+    if evidence:
+        st.markdown("###### How your experience lines up")
+        rows = ""
+        for m in evidence:
+            sim = ats_analyzer._calibrate(m.similarity) if report.semantic else int(round(m.similarity * 100))
+            rows += (
+                f'<div class="rb-ev"><span class="rb-ev-sim">{sim}% match</span>'
+                f'<div class="rb-ev-req">{escape(m.requirement)}</div>'
+                f'<p class="rb-ev-bullet">{escape(m.best_bullet)}</p></div>'
+            )
+        st.markdown(rows, unsafe_allow_html=True)
+
+    if report.education.specified:
+        st.caption(f"**Education:** {report.education.detail}")
+
+
+def _apply_suggestion(sg: "agents.Suggestion") -> bool:
+    """Write a rewrite back to the exact bullet it came from, and refresh its form field.
+
+    Returns False (a no-op) if the target bullet can't be located -- e.g. the
+    résumé was edited after the suggestion was generated -- so a stale card never
+    corrupts unrelated content.
+    """
+    entries = resume.experience if sg.source == "experience" else resume.projects
+    entry = next((e for e in entries if e.id == sg.entry_id), None)
+    if entry is None or not (0 <= sg.bullet_index < len(entry.bullet_points)):
+        return False
+    entry.bullet_points[sg.bullet_index] = sg.proposed
+    refresh_field(f"{'exp' if sg.source == 'experience' else 'proj'}_b_{sg.entry_id}")
+    return True
+
+
+# --- Job description input -----------------------------------------------------
 uploaded = st.file_uploader("Upload a job description (optional)", type=["pdf", "docx", "txt"])
 if uploaded is not None:
     try:
@@ -50,46 +219,24 @@ if analyze_clicked:
     if not jd_text.strip():
         st.warning("Paste or upload a job description first.")
         st.stop()
-    result = analyze(resume_text, jd_text)
+    with st.spinner("Reading the job and matching your résumé..."):
+        st.session_state["ats_report"] = analyze(resume, jd_text)
+    # A fresh analysis invalidates any previously generated suggestions.
+    st.session_state.pop("ats_suggestions", None)
+    st.session_state.pop("ats_suggest_error", None)
 
+report = st.session_state.get("ats_report")
+if report is not None:
     st.divider()
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric("ATS match score", f"{result.score}%")
-        st.progress(result.score / 100)
-        st.caption(f"{len(result.matched)} of {result.total_keywords} job keywords found in your résumé.")
-    with c2:
-        st.metric("Overall text similarity", f"{result.similarity}%")
-        st.progress(result.similarity / 100)
-        st.caption("TF-IDF similarity between the full texts of your résumé and the job.")
+    _render_report(report)
 
-    if result.score >= 75:
-        st.success("Strong match — your résumé already covers most of this job's keywords.")
-    elif result.score >= 50:
-        st.info("Moderate match — strengthen the missing keywords where you genuinely qualify.")
-    else:
-        st.warning("Low keyword match — see the gaps below.")
-
-    st.markdown(f"#### Matched ({len(result.matched)})")
-    if result.matched:
-        st.markdown(" ".join(f":green-background[{kw}]" for kw in result.matched))
-    else:
-        st.caption("None of the job's keywords were found.")
-
-    st.markdown(f"#### Missing ({len(result.missing)})")
-    if result.missing:
-        st.markdown(" ".join(f":red-background[{kw}]" for kw in result.missing))
-        st.caption("In the job but not your résumé. Add them **only if you genuinely have the experience** — "
-                   "the app never fabricates skills.")
-    else:
-        st.caption("Nothing missing — every keyword is already covered.")
-
-# --- AI tailoring: apply-able changes -----------------------------------------
+# --- Evidence-based AI tailoring ----------------------------------------------
 st.divider()
 st.markdown('<p class="rb-eyebrow">Assistant</p>', unsafe_allow_html=True)
-st.markdown('<p class="rb-panel-title">Tailor your résumé to this job</p>', unsafe_allow_html=True)
-st.markdown('<p class="rb-sub">AI rewrites <em>your own</em> content to match this job description. '
-            'Review each change and apply what you want — it never invents skills or facts.</p>',
+st.markdown('<p class="rb-panel-title">Evidence-based tailoring</p>', unsafe_allow_html=True)
+st.markdown('<p class="rb-sub">The AI retrieves the résumé bullets most relevant to this job and rewrites '
+            '<em>only those</em> — each suggestion shows the job requirement that prompted it, the exact bullet '
+            'it edits, and a confidence. It never invents skills or facts.</p>',
             unsafe_allow_html=True)
 
 if not ai.is_configured():
@@ -97,75 +244,53 @@ if not ai.is_configured():
 else:
     jd = get_job_description()
     if not jd.strip():
-        st.info("Paste a job description above and analyze it first — the changes are tailored to it.")
+        st.info("Paste a job description above and analyze it first — the suggestions are tailored to it.")
     else:
-        if st.button("Generate tailored changes", key="gen_changes", type="primary"):
-            with st.spinner("Tailoring your résumé to the job..."):
-                changes = {"summary": None, "bullets": {}}
-                errors = []
+        if st.button("Generate suggestions", key="gen_suggestions", type="primary"):
+            with st.spinner("Retrieving relevant bullets and tailoring them..."):
                 try:
-                    changes["summary"] = ai.generate_summary(resume, jd)
+                    st.session_state["ats_suggestions"] = agents.generate_suggestions(resume, jd)
+                    st.session_state.pop("ats_suggest_error", None)
                 except ai.AIError as exc:
-                    errors.append(f"Summary: {exc}")
-                for exp in resume.experience:
-                    if exp.bullet_points:
-                        try:
-                            changes["bullets"][exp.id] = ai.rewrite_bullets(
-                                exp.job_title, exp.company, exp.bullet_points, jd)
-                        except ai.AIError as exc:
-                            errors.append(f"{exp.job_title or 'A role'}: {exc}")
-                st.session_state["ats_changes"] = changes
-                st.session_state["ats_change_errors"] = errors
+                    st.session_state["ats_suggestions"] = []
+                    st.session_state["ats_suggest_error"] = str(exc)
 
-        for err in st.session_state.get("ats_change_errors", []):
-            st.caption(f"Error — {err}")
+        err = st.session_state.get("ats_suggest_error")
+        if err:
+            st.error(f"Couldn't generate suggestions: {err}")
 
-        changes = st.session_state.get("ats_changes")
-        if changes:
+        if "ats_suggestions" in st.session_state:
+            suggestions = st.session_state["ats_suggestions"]
+            if not suggestions and not err:
+                st.info("No confident, evidence-backed edits to suggest — your bullets already align, or "
+                        "none clearly match this job's requirements (the AI won't invent a match).")
+
+            _badge_class = {"High": "hi", "Medium": "mid", "Low": "lo"}
             applied_any = False
-
-            # Tailored summary
-            summary = changes.get("summary")
-            if summary:
+            for i, sg in enumerate(list(suggestions)):
                 with st.container(border=True):
-                    st.markdown("**Tailored professional summary**")
-                    st.write(summary)
+                    st.markdown(
+                        f'<span class="rb-sg-badge {_badge_class.get(sg.confidence, "lo")}">'
+                        f'{escape(sg.confidence)} confidence</span>'
+                        f'<p class="rb-sg-because">Because the job asks: '
+                        f'<b>{escape(sg.jd_requirement)}</b></p>'
+                        f'<p class="rb-sg-target">Editing your bullet · {escape(sg.role_label)}</p>'
+                        f'<p class="rb-sg-old">{escape(sg.original)}</p>'
+                        f'<p class="rb-sg-new">{escape(sg.proposed)}</p>',
+                        unsafe_allow_html=True,
+                    )
+                    key = f"{sg.source}_{sg.entry_id}_{sg.bullet_index}"
                     a, d, _ = st.columns([1, 1, 3])
-                    if a.button("Apply", key="apply_summary", type="primary", width="stretch"):
-                        resume.personal_info.professional_summary = summary
-                        refresh_field("personal_summary")
-                        changes["summary"] = None
+                    if a.button("Apply", key=f"apply_{key}", type="primary", width="stretch"):
+                        if _apply_suggestion(sg):
+                            suggestions.remove(sg)
+                            applied_any = True
+                    if d.button("Dismiss", key=f"dismiss_{key}", width="stretch"):
+                        suggestions.remove(sg)
                         applied_any = True
-                    if d.button("Dismiss", key="dismiss_summary", width="stretch"):
-                        changes["summary"] = None
-                        applied_any = True
-
-            # Tailored bullets, per role
-            exp_by_id = {e.id: e for e in resume.experience}
-            for exp_id, new_bullets in list(changes.get("bullets", {}).items()):
-                exp = exp_by_id.get(exp_id)
-                if not exp or not new_bullets:
-                    continue
-                with st.container(border=True):
-                    label = " · ".join(x for x in [exp.job_title, exp.company] if x) or "Experience"
-                    st.markdown(f"**Tailored bullets — {label}**")
-                    for b in new_bullets:
-                        st.markdown(f"- {b}")
-                    a, d, _ = st.columns([1, 1, 3])
-                    if a.button("Apply", key=f"apply_b_{exp_id}", type="primary", width="stretch"):
-                        exp.bullet_points = new_bullets
-                        refresh_field(f"exp_b_{exp_id}")
-                        changes["bullets"].pop(exp_id, None)
-                        applied_any = True
-                    if d.button("Dismiss", key=f"dismiss_b_{exp_id}", width="stretch"):
-                        changes["bullets"].pop(exp_id, None)
-                        applied_any = True
-
-            if not summary and not changes.get("bullets"):
-                st.success("All tailored changes handled. Your résumé and downloads are updated.")
-                st.session_state.pop("ats_changes", None)
 
             if applied_any:
+                st.session_state["ats_suggestions"] = suggestions
                 st.rerun()
 
 render_download_footer(resume)

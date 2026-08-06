@@ -15,15 +15,16 @@ straight from the same résumé.
       every section, as an alternative to entering everything manually.
       Anything the parser can't confidently map to a known section is kept
       verbatim, tagged with its original heading from the resume.
-- [x] **Phase 3** -- Paste/upload a job description, extract its keywords,
-      compare them against the resume, and show an ATS match score plus the
-      matched and missing keywords.
-- [x] **Phase 4** -- AI (Tencent Hunyuan 3 via OpenRouter) lives on the **ATS
-      Match page**: given your résumé and a job description, it generates
-      **apply-able changes** (a tailored professional summary and rewritten
-      experience bullets) that you review and apply one by one -- only ever
-      rephrasing content you already entered, tuned to the job, never inventing
-      anything.
+- [x] **Phase 3** -- Paste/upload a job description and get a **semantic match
+      breakdown** (sentence embeddings, not keywords): an overall %, which
+      skills matched vs. are missing, how well your experience covers the job's
+      responsibilities, and whether your education fits.
+- [x] **Phase 4** -- An **agent workflow** on the **ATS Match page** turns that
+      analysis into **evidence-based, apply-able suggestions**: a RAG retriever
+      pulls only the résumé bullets relevant to the job, and each suggestion
+      shows *which JD requirement caused it*, *which bullet it edits*, and a
+      *confidence* -- only ever rephrasing content you already entered, never
+      inventing anything.
 - [x] **Export** -- Download the finished resume as an ATS-friendly Word
       (.docx) or PDF file (single column, standard headings, real bullets,
       no tables or graphics).
@@ -36,14 +37,16 @@ straight from the same résumé.
 
 ## Tech Stack
 
-Python, Streamlit, pypdf, python-docx, reportlab, scikit-learn,
-requests (Adzuna + Remotive job APIs), and openai (used as an
-OpenAI-compatible client for OpenRouter). Two deviations
-from the originally-listed stack, each explained in its phase notes below:
-**scikit-learn** replaces spaCy for Phase 3 (no runtime model download), and
-Phase 4 uses **Tencent Hunyuan 3 (`tencent/hy3:free`) via OpenRouter** instead
-of the OpenAI API directly, since Hunyuan 3 has a free tier so the deployed
-app can run at no cost.
+Python, Streamlit, pypdf, python-docx, reportlab, requests (Adzuna + Remotive
+job APIs), and openai (used as an OpenAI-compatible client for **both** the
+OpenRouter chat model **and** a free embeddings endpoint -- Google Gemini's
+free tier by default, or any OpenAI-compatible provider). The app is
+deliberately light -- **no torch, no local ML model** -- so it deploys cleanly
+on the Streamlit Community Cloud free tier. ATS matching is done with
+**sentence embeddings** (`text-embedding-3-small`) rather than TF-IDF, and the
+cosine/vector math is pure Python, so no numpy/scipy/scikit-learn is needed.
+The chat model is **Tencent Hunyuan 3 (`tencent/hy3:free`) via OpenRouter**,
+whose free tier lets the deployed app run at no cost.
 
 ## Project Structure
 
@@ -65,14 +68,16 @@ resume-builder/
 │   ├── validators.py       # Email / phone / URL format validation
 │   ├── date_picker.py      # Month + Year dropdown pair for resume dates
 │   ├── resume_parser.py    # Best-effort .pdf/.docx/.txt resume text extraction + parsing
-│   ├── ats_analyzer.py     # JD keyword extraction + resume match scoring
-│   ├── ai_assistant.py     # OpenRouter/Hunyuan client + never-invent prompts (summary/bullets/suggestions)
+│   ├── embeddings.py       # Cached embeddings client (Gemini free tier by default) + cosine (ATS + RAG)
+│   ├── ats_analyzer.py     # Semantic JD/résumé match -> MatchReport (skills/experience/education)
+│   ├── agents.py           # Agent workflow: Retriever (RAG) -> Evidence -> Writer for tailoring
+│   ├── ai_assistant.py     # OpenRouter/Hunyuan client + never-invent prompts (the Writer's LLM call)
 │   ├── job_search.py       # Job search: Adzuna + Remotive + RemoteOK + WWR + Greenhouse/Lever boards (parallel, cached, deduped)
 │   ├── docx_export.py      # ATS-friendly Word (.docx) export (matches the preview format)
 │   └── pdf_export.py       # ATS-friendly PDF export (matches the preview format)
 ├── pages/
 │   ├── 1_🧭_Dashboard.py   # Edit (left, tabbed) + live preview (right) + download footer
-│   ├── 2_🎯_ATS_Match.py   # JD match score + matched/missing keywords + AI suggestions
+│   ├── 2_🎯_ATS_Match.py   # Semantic match breakdown + evidence-based AI tailoring cards
 │   └── 3_💼_Jobs.py        # Search live openings by title/location/work type -> official apply links
 ├── assets/                 # Static assets (icons, sample data, etc.)
 ├── templates/              # Resume document templates (reserved for future custom exporters)
@@ -174,83 +179,106 @@ preview (the résumé stays white in both themes).
   in the export) -- so nothing from the uploaded file is silently lost, even if
   the app couldn't figure out where it belongs.
 
-### Phase 3 -- Job description matching (ATS)
+### Phase 3 -- Job description matching (ATS, semantic)
 
 - The **ATS Match** page lets the user paste or upload a job description and
-  reports how well the resume matches it, using `utils/ats_analyzer.py`.
-- **Why scikit-learn instead of spaCy.** The original stack listed spaCy for
-  this phase, but spaCy needs a ~12MB language model downloaded at runtime,
-  which is fragile in a sandboxed/offline environment. Phase 3 uses
-  scikit-learn's TF-IDF for the similarity score plus a rule-based keyword
-  extractor -- close to how many real ATS tools actually work, and with no
-  runtime model download. (spaCy can be swapped in later for smarter
-  noun-phrase extraction if desired.)
-- **Keyword extraction** (`extract_keywords`) draws from two sources:
-  (1) a curated **gazetteer** of real skills, tools, cloud platforms, certs,
-  and soft skills found in the JD, and (2) **acronyms / tech-punctuation
-  tokens** (AI, AWS, C++, Data+). Named products in ordinary title case
-  (Azure, CompTIA, Python) are covered by the gazetteer, so we deliberately
-  don't try to guess title-case proper nouns -- that keeps ordinary words
-  that merely open a bullet ("Developing", "Strong") out of the results.
-- **Matching** (`analyze`) checks each JD keyword against the resume's full
-  searchable text (`ResumeData.searchable_text()` -- skills *and* experience
-  bullets, projects, education, and uploaded extra sections), then reports:
-  a **keyword-coverage score**, a **TF-IDF cosine-similarity score**, and
-  the **matched** (green) and **missing** (red) keyword lists.
-- Matching is literal, mirroring how real ATS software screens resumes: if a
-  job asks for "Azure" and the resume only says "cloud", Azure shows as
-  missing. Missing keywords are presented as information framed **"add these
-  only if you genuinely have the experience"** -- the app never rewrites the
-  resume or invents a skill.
+  reports how well the résumé matches it, using `utils/ats_analyzer.py` +
+  `utils/embeddings.py`.
+- **Sentence embeddings, not keywords.** Matching compares *meaning* using a
+  sentence-embedding model (Google Gemini's free `text-embedding-004` by
+  default), so "React" matches "ReactJS", "ML" matches "machine learning", and
+  "built pipelines" matches "data engineering" -- things literal keyword matching
+  misses. `embeddings.py` is a thin, cached, batched, **provider-neutral**
+  client; cosine similarity is pure Python (no numpy/scikit-learn).
+- **A real breakdown, not one number** (`analyze` -> `MatchReport`):
+  - **Overall match %** -- a calibrated blend of the three sections below.
+  - **Skills matched / missing** -- JD skill candidates are pulled with the
+    curated **gazetteer** + acronym detection (`extract_keywords`), but the
+    match *decision* is semantic: a JD skill counts as covered when its closest
+    résumé skill clears a similarity threshold. Matched skills show which résumé
+    skill covered them; missing skills are shown as honest gaps.
+  - **Experience match** -- each JD responsibility is matched to the résumé
+    experience bullet that best supports it, with that bullet surfaced as
+    evidence.
+  - **Education match** -- the JD's stated education requirement (if any) vs. the
+    résumé's education; "n/a" when the JD asks for none, so nothing is penalised
+    unfairly.
+- Missing skills are framed **"add these only if you genuinely have them"** --
+  the app never rewrites the résumé or invents a skill.
+- **Graceful fallback.** With no `EMBEDDINGS_API_KEY`, `analyze` falls back to
+  the previous lexical (exact/token-overlap) matching, flagged in the UI, so the
+  page keeps working -- it just isn't synonym-aware until a (free) key is added.
 
-### Phase 4 -- AI writing assistant (Tencent Hunyuan 3 via OpenRouter)
+### Phase 4 -- Evidence-based AI tailoring (agent workflow + RAG)
 
 - **AI lives only on the ATS Match page**, not the Dashboard. Given your résumé
-  and the job description, it generates **apply-able changes** you review and
-  apply individually (`utils/ai_assistant.py`, OpenAI-compatible `openai` SDK
-  pointed at OpenRouter serving Tencent's `tencent/hy3:free`):
-  - **Tailored professional summary** -- a 2-3 sentence summary rebuilt from the
-    experience, projects, and skills you entered, tuned to the job. **Apply**
-    writes it into your résumé.
-  - **Tailored experience bullets** (per role) -- your saved bullets rewritten
-    into stronger, JD-relevant phrasing, preserving every fact. **Apply** per
-    role.
+  and the job description, it generates **evidence-based, apply-able
+  suggestions** you review individually. Instead of one big prompt dumping the
+  whole résumé and JD into the model, the work is split into a small **agent
+  workflow** (`utils/agents.py`), three parts of which are deterministic (no
+  LLM) and only the last of which calls the language model:
+  1. **Scorer** (`ats_analyzer.analyze`) -- the semantic breakdown from Phase 3.
+  2. **Retriever** (RAG) -- embeds every résumé bullet once and, for each JD
+     requirement, retrieves only the single most relevant bullet (with
+     provenance). **Only those retrieved bullets reach the LLM** -- never the
+     whole résumé.
+  3. **Evidence** -- binds each retrieved bullet to the JD requirement that
+     surfaced it and to a **confidence** derived from the retrieval similarity.
+     The "why" behind every suggestion is grounded, not model-invented.
+  4. **Writer** (`ai_assistant.tailor_bullets`, the one LLM call) -- rewrites
+     each retrieved bullet to emphasise its requirement.
+- **Every suggestion is a card:** *which JD requirement caused it* -> *which
+  résumé bullet is being modified* (original vs. rewrite) -> *confidence*.
+  **Apply** writes the rewrite back to that exact bullet; **Dismiss** drops it.
 - **Never fabricates.** A strict system prompt forbids inventing employers,
-  dates, metrics, technologies, or skills; every function only rephrases
-  content you already provided, tuned to the job description. Each change is a
-  **proposal you explicitly Apply or Dismiss** -- nothing is written into your
-  résumé silently.
+  dates, metrics, technologies, or skills; the Writer only rephrases bullets you
+  already wrote. Bullets whose evidence is too weak are skipped entirely (that's
+  exactly where fabrication would otherwise creep in), and nothing is written
+  into your résumé silently.
 - **Why Hunyuan 3 via OpenRouter.** OpenRouter exposes an OpenAI-compatible
   endpoint, and Hunyuan 3 has a free tier (`tencent/hy3:free`), so the
   deployed app can run at no cost. Because it's OpenAI-compatible, `base URL`,
   `model`, and `key` are all configurable (`OPENROUTER_BASE_URL`,
   `OPENROUTER_MODEL`, `OPENROUTER_API_KEY`) -- point it at a different
-  OpenAI-compatible provider or model with zero code changes. The whole
-  integration is isolated in `ai_assistant.py`.
-- Under the hood, accepting a proposal writes back into the form field via a
+  OpenAI-compatible provider or model with zero code changes.
+- Under the hood, accepting a suggestion writes back into the form field via a
   small revision-nonce on the widget key (`session_manager.form_key` /
   `refresh_field`), because Streamlit otherwise ignores a keyed widget's
-  `value=` once the user has touched it.
+  `value=` once the user has touched it. Stale suggestions (résumé edited after
+  generation) are guarded -- a rewrite that can't locate its target bullet is a
+  no-op, never a corruption.
 
-### AI setup (required for Phase 4 features)
+### AI setup (two keys, both free, both optional)
 
-The AI features are hidden until an OpenRouter API key is present; everything
-else works without one.
+Everything else works without keys. Two independent features light up when their
+key is present -- **both have a genuinely free tier, no billing card needed:**
 
-1. Get a key at https://openrouter.ai/keys (the `tencent/hy3:free` model is free).
-2. **Locally:** create `.streamlit/secrets.toml` (git-ignored) with:
+- **`OPENROUTER_API_KEY`** -- the chat model behind the AI tailoring suggestions
+  (Phase 4). Free key at https://openrouter.ai/keys (`tencent/hy3:free` is free).
+- **`EMBEDDINGS_API_KEY`** -- embeddings behind the *semantic* ATS breakdown and
+  the RAG retriever (Phase 3). Default is **Google Gemini's free tier** -- free
+  key at https://aistudio.google.com/apikey. Without it, ATS matching falls back
+  to keyword/lexical matching (flagged in the UI). Any OpenAI-compatible
+  embeddings provider works via the `EMBEDDINGS_BASE_URL` / `EMBEDDINGS_MODEL`
+  overrides.
+
+1. **Locally:** create `.streamlit/secrets.toml` (git-ignored) with whichever you
+   have -- see `.streamlit/secrets.toml.example` for the full template:
    ```toml
-   OPENROUTER_API_KEY = "your-key-here"
+   OPENROUTER_API_KEY = "your-openrouter-key"
+   EMBEDDINGS_API_KEY = "your-gemini-key"
    # optional overrides:
    # OPENROUTER_MODEL = "tencent/hy3:free"
    # OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+   # EMBEDDINGS_MODEL = "text-embedding-004"
+   # EMBEDDINGS_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
    ```
-   or set the `OPENROUTER_API_KEY` environment variable.
-3. **On Streamlit Community Cloud:** add `OPENROUTER_API_KEY` under the app's
+   or set the same names as environment variables.
+2. **On Streamlit Community Cloud:** add the keys under the app's
    **Settings → Secrets**.
 
-Note: free-tier models are rate-limited (a capped number of requests per day);
-switch `OPENROUTER_MODEL` to `tencent/hy3` (paid) if you hit the limit.
+Note: free-tier chat models are rate-limited (a capped number of requests per
+day); switch `OPENROUTER_MODEL` to `tencent/hy3` (paid) if you hit the limit.
 
 ### Job search
 
@@ -262,16 +290,17 @@ switch `OPENROUTER_MODEL` to `tencent/hy3` (paid) if you hit the limit.
   role. Industry maps to each source's own category taxonomy (`INDUSTRIES` in
   `utils/job_search.py`), so "Data & Analytics", "Design", "Finance & Legal",
   etc. narrow both Adzuna and Remotive where each has a matching category.
-- Each card shows a **match score** (how well the job fits your résumé), a
-  **freshness** label (how recently it was posted), the **source**, and chips for
-  which of **your skills** the listing mentions. Results are **sorted by best
-  match, then freshest**. For the full matched-vs-missing breakdown, **Match in
-  ATS** loads that job's description into the ATS Match page in one click.
-  - *Match score* is skill-overlap over the job's title + description, normalised
-    so matching ~5 of your skills counts as a full match (users with long skill
-    lists aren't penalised). It's positive-only -- an absent description can hide
-    a match but never invent one -- so company-board jobs (no description) match
-    on title and tend to score lower.
+- Each card shows, for that job's own named skills, which ones **you already
+  have** (green chips) and which are **missing** (red chips), plus a **freshness**
+  label and the **source**. Results are **sorted by most skills covered, then
+  freshest**. Skill detection is positive-only -- a short or absent description
+  can hide a match but never invent one -- so the chips only ever under-claim.
+- **Match in ATS** loads that job's **full description** into the ATS Match page
+  in one click for the semantic breakdown. Because Adzuna returns only a
+  truncated snippet and company boards return none, the handoff fetches the full
+  text from the public posting page when what it holds looks partial
+  (`job_search.fetch_full_description`); the ATS page shows it in an editable box,
+  so you can always paste or correct the JD.
 - **Six free, official, legal-to-use sources** back it (`utils/job_search.py`),
   fetched **in parallel** (thread-safe 30-min cache), merged and **deduplicated**
   (normalised title + company; the richer/fresher copy wins):

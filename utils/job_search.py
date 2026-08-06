@@ -134,6 +134,54 @@ def strip_html(text: str, limit: int = 6000) -> str:
     return _WS_RE.sub(" ", text).strip()[:limit]
 
 
+# Whole non-content blocks to drop before extracting readable page text, so a
+# scraped posting page doesn't feed nav menus and scripts into the ATS matcher.
+_NONCONTENT_RE = re.compile(r"(?is)<(script|style|noscript|head|nav|footer|header|svg)[^>]*>.*?</\1>")
+
+
+def fetch_full_description(job: "JobPosting") -> str:
+    """Best-effort *full* job-description text for the ATS handoff.
+
+    Why: the remote boards (Remotive, RemoteOK, We Work Remotely, Lever) already
+    return the whole description, but **Adzuna returns only a truncated snippet**
+    and **Greenhouse returns none** -- so matching against `job.description` for
+    those sources scores against partial text and understates the result.
+
+    When what we already hold looks partial, fetch the public posting page and
+    extract its readable text, keeping it only if it's clearly richer than the
+    snippet. Any failure falls back to the snippet. This never applies to a job
+    or submits anything -- it only reads the same public page the user would open
+    via "View & apply", and the ATS page shows the result in an editable box so
+    the user can always correct or paste the real JD.
+    """
+    snippet = (job.description or "").strip()
+    if len(snippet) >= 800:  # already a full description; don't refetch
+        return snippet
+
+    url = (job.url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return snippet
+
+    try:
+        resp = requests.get(url, headers=_UA, timeout=_TIMEOUT, allow_redirects=True)
+        resp.raise_for_status()
+        ctype = resp.headers.get("content-type", "").lower()
+        if "html" not in ctype and "text" not in ctype:
+            return snippet
+        # Pages that don't declare a charset make requests default to latin-1,
+        # which mangles UTF-8 punctuation; trust the sniffed encoding instead.
+        if not resp.encoding or "charset" not in ctype:
+            resp.encoding = resp.apparent_encoding or resp.encoding
+        body = _NONCONTENT_RE.sub(" ", resp.text)
+        text = strip_html(body, limit=8000)
+    except requests.RequestException:
+        return snippet
+
+    # Only trust the scrape if it's substantially longer than the snippet --
+    # otherwise we risk swapping a clean snippet for page chrome.
+    return text if len(text) > max(len(snippet) * 1.3, 400) else snippet
+
+
 def posted_days(posted: str) -> Optional[int]:
     """Whole days since a 'YYYY-MM-DD' posting date, or None if unparseable."""
     if not posted:
@@ -158,8 +206,9 @@ class JobPosting:
     job_type: str = ""
     posted: str = ""     # YYYY-MM-DD
     description: str = ""                       # cleaned plain text (for matching)
-    matched_skills: List[str] = field(default_factory=list)
-    match_score: Optional[int] = None           # 0-100 vs the résumé (set by the page)
+    matched_skills: List[str] = field(default_factory=list)   # job skills you have (set by the page)
+    missing_skills: List[str] = field(default_factory=list)   # job skills you lack (set by the page)
+    match_score: Optional[int] = None           # retained for sorting only; not displayed
     freshness_days: Optional[int] = None         # days since posted (set by the page)
 
 
