@@ -7,34 +7,6 @@ straight from the same résumé.
 
 **🔗 Live demo:** https://applymate-bb.streamlit.app/
 
-## Status: Complete (all phases + export)
-
-- [x] **Phase 1** -- Personal details, Education, Experience, Projects, and
-      Skills forms.
-- [x] **Phase 2** -- Upload an existing resume (.pdf/.docx/.txt) to pre-fill
-      every section, as an alternative to entering everything manually.
-      Anything the parser can't confidently map to a known section is kept
-      verbatim, tagged with its original heading from the resume.
-- [x] **Phase 3** -- Paste/upload a job description and get a **semantic match
-      breakdown** (sentence embeddings, not keywords): an overall %, which
-      skills matched vs. are missing, how well your experience covers the job's
-      responsibilities, and whether your education fits.
-- [x] **Phase 4** -- An **agent workflow** on the **ATS Match page** turns that
-      analysis into **evidence-based, apply-able suggestions**: a RAG retriever
-      pulls only the résumé bullets relevant to the job, and each suggestion
-      shows *which JD requirement caused it*, *which bullet it edits*, and a
-      *confidence* -- only ever rephrasing content you already entered, never
-      inventing anything.
-- [x] **Export** -- Download the finished resume as an ATS-friendly Word
-      (.docx) or PDF file (single column, standard headings, real bullets,
-      no tables or graphics).
-- [x] **Job search** -- Search live openings by job title, location, work
-      type, industry, and country across **six free sources** (Adzuna, Remotive,
-      RemoteOK, We Work Remotely, and curated Greenhouse/Lever company boards),
-      fetched in parallel, deduped, and ranked by **match score** + **freshness**.
-      Each listing can be sent to ATS Match in one click. Read-only: it only
-      links to official postings.
-
 ## Tech Stack
 
 Python, Streamlit, pypdf, python-docx, reportlab, requests (Adzuna + Remotive
@@ -80,8 +52,7 @@ resume-builder/
 │   ├── 2_🎯_ATS_Match.py   # Semantic match breakdown + evidence-based AI tailoring cards
 │   └── 3_💼_Jobs.py        # Search live openings by title/location/work type -> official apply links
 ├── assets/                 # Static assets (icons, sample data, etc.)
-├── templates/              # Resume document templates (reserved for future custom exporters)
-└── output/                 # Generated resume files (git-ignored)
+└── templates/              # Resume document templates (reserved for future custom exporters)
 ```
 
 **Design (single committed look -- technical, Vercel-core).** A neutral **Zinc**
@@ -104,7 +75,7 @@ preview (the résumé stays white in both themes).
 
 ## How It Works
 
-### Phase 1 -- Manual entry
+### Manual entry
 
 - `models/resume_data.py` defines dataclasses (`PersonalInfo`,
   `EducationEntry`, `ExperienceEntry`, `ProjectEntry`, `SkillCategory`,
@@ -142,7 +113,7 @@ preview (the résumé stays white in both themes).
   it renders exactly what the `.docx` / `.pdf` will export, so there's no
   separate Review page; you see the finished résumé update as you save.
 
-### Phase 2 -- Upload an existing resume
+### Upload an existing resume
 
 - The **Import** tab in the Dashboard's left panel accepts a `.pdf`, `.docx`,
   or `.txt` file and calls `utils/resume_parser.py` to pre-fill every section,
@@ -179,7 +150,7 @@ preview (the résumé stays white in both themes).
   in the export) -- so nothing from the uploaded file is silently lost, even if
   the app couldn't figure out where it belongs.
 
-### Phase 3 -- Job description matching (ATS, semantic)
+### Job description matching (ATS, semantic)
 
 - The **ATS Match** page lets the user paste or upload a job description and
   reports how well the résumé matches it, using `utils/ats_analyzer.py` +
@@ -209,7 +180,7 @@ preview (the résumé stays white in both themes).
   the previous lexical (exact/token-overlap) matching, flagged in the UI, so the
   page keeps working -- it just isn't synonym-aware until a (free) key is added.
 
-### Phase 4 -- Evidence-based AI tailoring (agent workflow + RAG)
+### Evidence-based AI tailoring (agent workflow + RAG)
 
 - **AI lives only on the ATS Match page**, not the Dashboard. Given your résumé
   and the job description, it generates **evidence-based, apply-able
