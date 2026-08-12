@@ -158,13 +158,13 @@ def inject_theme() -> None:
 
 
 def render_header(active: str) -> None:
-    """Render the wordmark lockup + top navigation (Dashboard / ATS Match / Jobs)."""
+    """Render the wordmark lockup + top nav (Dashboard / ATS Match / Jobs / Cover Letter)."""
     st.markdown(
         '<div class="rb-header"><span class="rb-word">Apply<em>Mate</em></span>'
         '<span class="rb-tag">Résumé + Jobs</span></div>',
         unsafe_allow_html=True,
     )
-    spacer, b1, b2, b3 = st.columns([5, 1.4, 1.4, 1.4])
+    spacer, b1, b2, b3, b4 = st.columns([3.1, 1.4, 1.4, 1.4, 1.75])
     with b1:
         if st.button("Dashboard", key="nav_dashboard", width="stretch",
                      type="primary" if active == "dashboard" else "secondary",
@@ -180,6 +180,11 @@ def render_header(active: str) -> None:
                      type="primary" if active == "jobs" else "secondary",
                      disabled=active == "jobs"):
             st.switch_page("pages/3_💼_Jobs.py")
+    with b4:
+        if st.button("Cover Letter", key="nav_cover", width="stretch",
+                     type="primary" if active == "cover" else "secondary",
+                     disabled=active == "cover"):
+            st.switch_page("pages/4_✉️_Cover_Letter.py")
     st.markdown('<div class="rb-rule"></div>', unsafe_allow_html=True)
 
 

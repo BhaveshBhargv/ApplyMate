@@ -3,9 +3,10 @@
 Inputs (job title, location, work type, country) are sent to free, official job
 APIs via utils.job_search. Results are shown as cards, each linking to the real
 posting. Each card lists which of the job's named skills the résumé already
-covers and which are missing, and a one-click handoff loads the job's full
-description into ATS Match for a semantic breakdown. Nothing is applied to or
-sent on the user's behalf -- links only.
+covers and which are missing, and two one-click handoffs load the job's full
+description into ATS Match (for a semantic breakdown) or into Cover Letter (to
+write a grounded letter for that job). Nothing is applied to or sent on the
+user's behalf -- links only.
 """
 from html import escape
 
@@ -20,7 +21,12 @@ from utils.job_search import (
     search_jobs,
     skills_in_text,
 )
-from utils.session_manager import get_resume_data, init_session_state, set_job_description
+from utils.session_manager import (
+    get_resume_data,
+    init_session_state,
+    set_cover_letter_target,
+    set_job_description,
+)
 from utils.theme import inject_theme, render_download_footer, render_header, render_hero
 
 inject_theme()
@@ -224,7 +230,7 @@ if result is not None:
                     unsafe_allow_html=True,
                 )
 
-                a, b, _sp = st.columns([1.3, 1.3, 2.4])
+                a, b, c, _sp = st.columns([1.3, 1.3, 1.4, 1.0])
                 link = _safe_link(job.url)
                 if link:
                     a.link_button("View & apply", link, width="stretch")
@@ -233,6 +239,14 @@ if result is not None:
                         with st.spinner("Loading the full job description..."):
                             set_job_description(job_search.fetch_full_description(job))
                         st.switch_page("pages/2_🎯_ATS_Match.py")
+                    # Same handoff, plus the company/role this listing actually
+                    # states, so the letter can name them without guessing.
+                    if c.button("Cover letter", key=f"cover_{i}", width="stretch"):
+                        with st.spinner("Loading the full job description..."):
+                            set_job_description(job_search.fetch_full_description(job))
+                        set_cover_letter_target(job.company, job.title)
+                        st.session_state["cover_letter_auto"] = True
+                        st.switch_page("pages/4_✉️_Cover_Letter.py")
 
         # --- Pager ---------------------------------------------------------
         if total_pages > 1:

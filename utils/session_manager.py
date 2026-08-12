@@ -19,6 +19,7 @@ from models.resume_data import (
 
 _RESUME_KEY = "resume_data"
 _JD_KEY = "job_description"
+_CL_TARGET_KEY = "cover_letter_target"
 
 
 def init_session_state() -> None:
@@ -51,6 +52,22 @@ def get_job_description() -> str:
 
 def set_job_description(text: str) -> None:
     st.session_state[_JD_KEY] = text
+
+
+def set_cover_letter_target(company: str, role: str) -> None:
+    """Record which company/role the Cover Letter page should write for.
+
+    Set by the Jobs page's "Cover letter" button, alongside set_job_description().
+    Only ever what the listing actually stated -- the letter names a company only
+    when one was really provided.
+    """
+    st.session_state[_CL_TARGET_KEY] = {"company": company.strip(), "role": role.strip()}
+
+
+def get_cover_letter_target() -> tuple:
+    """Return (company, role) for the pending cover letter, or ("", "")."""
+    target = st.session_state.get(_CL_TARGET_KEY) or {}
+    return target.get("company", ""), target.get("role", "")
 
 
 def form_key(base: str) -> str:

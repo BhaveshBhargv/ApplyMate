@@ -23,12 +23,13 @@ whose free tier lets the deployed app run at no cost.
 ## Project Structure
 
 The UI is a single two-panel **Dashboard** (edit on the left, live résumé
-preview on the right, download in the footer), an **ATS Match** page, and a
-**Jobs** page for searching live openings.
+preview on the right, download in the footer), an **ATS Match** page, a
+**Jobs** page for searching live openings, and a **Cover Letter** page that
+writes a grounded letter for one of those jobs.
 
 ```
 resume-builder/
-├── app.py                  # Entry point: registers the 3 pages via st.navigation
+├── app.py                  # Entry point: registers the 4 pages via st.navigation
 ├── requirements.txt
 ├── models/
 │   └── resume_data.py      # Dataclasses: the single source of truth for resume content
@@ -45,12 +46,15 @@ resume-builder/
 │   ├── agents.py           # Agent workflow: Retriever (RAG) -> Evidence -> Writer for tailoring
 │   ├── ai_assistant.py     # OpenRouter/Hunyuan client + never-invent prompts (the Writer's LLM call)
 │   ├── job_search.py       # Job search: Adzuna + Remotive + RemoteOK + WWR + Greenhouse/Lever boards (parallel, cached, deduped)
+│   ├── cover_letter.py     # Cover letter: evidence retrieval -> one LLM call -> claim verifier
+│   ├── cover_letter_pdf.py # One-page business-letter PDF (header matches the résumé export)
 │   ├── docx_export.py      # ATS-friendly Word (.docx) export (matches the preview format)
 │   └── pdf_export.py       # ATS-friendly PDF export (matches the preview format)
 ├── pages/
 │   ├── 1_🧭_Dashboard.py   # Edit (left, tabbed) + live preview (right) + download footer
 │   ├── 2_🎯_ATS_Match.py   # Semantic match breakdown + evidence-based AI tailoring cards
-│   └── 3_💼_Jobs.py        # Search live openings by title/location/work type -> official apply links
+│   ├── 3_💼_Jobs.py        # Search live openings by title/location/work type -> official apply links
+│   └── 4_✉️_Cover_Letter.py # Grounded cover letter for one job + verifier flags + PDF download
 ├── assets/                 # Static assets (icons, sample data, etc.)
 └── templates/              # Resume document templates (reserved for future custom exporters)
 ```
@@ -302,6 +306,41 @@ keys. To also get on-site / hybrid / location-based roles, add free Adzuna keys:
    ```
 3. **On Streamlit Cloud:** add both under **Settings → Secrets**.
 
+### Cover letter (grounded, verified, per job)
+
+- The **Cover Letter** page writes a letter for **one specific job**, built only
+  from the résumé. Every job card on the **Jobs** page has a **Cover letter**
+  button: it fetches that posting's full description, carries the company and
+  role across, and generates immediately -- or open the page from the nav and
+  paste a job description yourself.
+- Same shape as the tailoring agent -- deterministic work around a single LLM
+  call (`utils/cover_letter.py`):
+  1. **Retriever** -- `ats_analyzer.analyze()` supplies the strongest
+     (job requirement → supporting résumé bullet) pairs, the job's skills the
+     résumé genuinely evidences, and the ones it doesn't. The top few pairs are
+     the letter's *only* subject matter.
+  2. **Writer** -- `ai_assistant.write_cover_letter()`, one call, seeing only
+     that evidence, the résumé's own facts, and an explicit **do-not-claim list**
+     built from the skills the résumé lacks. It is told never to claim a skill
+     just because the job names it.
+  3. **Verifier** -- the finished letter is re-read deterministically: every
+     tool, platform, certification, and number in it is checked against the
+     résumé text. Anything unsupported, or a word count outside the 250–350
+     target, sends the draft back **once** with those complaints; the better of
+     the two drafts wins.
+- **Nothing is hidden.** The page shows the word count, the matches the letter
+  was built from, the skills it was told to withhold, and any claim the verifier
+  still couldn't find in your résumé -- flagged for you to remove, never quietly
+  kept. The letter sits in an editable box, so it's always reviewed before it
+  leaves.
+- Output is the letter only (salutation → body → sign-off); preamble,
+  letterheads, and trailing model notes are stripped rather than trusted.
+- **Download PDF** (`utils/cover_letter_pdf.py`, reportlab) renders exactly
+  what's in the box as a one-page business letter -- the same header as the
+  résumé export, then the date, a `Re:` line, and your text.
+- Uses the same `OPENROUTER_API_KEY` as the tailoring suggestions; the
+  `EMBEDDINGS_API_KEY` is optional and just makes the retrieved matches stronger.
+
 ### Export -- download the finished resume
 
 - The **download footer** (on every page, via `utils/theme.render_download_footer`)
@@ -318,7 +357,6 @@ keys. To also get on-site / hybrid / location-based roles, add free Adzuna keys:
 ## Setup
 
 ```bash
-cd resume-builder
 python -m venv .venv
 .venv\Scripts\activate        # Windows
 pip install -r requirements.txt

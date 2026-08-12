@@ -44,6 +44,36 @@ _SYSTEM_PROMPT = (
 )
 
 
+# A cover letter is prose, not résumé bullets, so it needs its own system prompt --
+# but the same never-invent contract, restated for letter-specific temptations
+# (claiming a skill because the job asked for it, praising a company you know
+# nothing about, padding with the usual AI cover-letter clichés).
+_COVER_LETTER_SYSTEM = (
+    "You write job-application cover letters. You write the way a capable, "
+    "self-aware person writes about their own work: specific, plain, and measured, "
+    "with no salesmanship.\n\n"
+    "ABSOLUTE RULES -- you must never break these:\n"
+    "- Use ONLY facts explicitly present in the résumé material you are given.\n"
+    "- NEVER invent or imply employers, job titles, dates, degrees, certifications, "
+    "metrics, numbers, percentages, tools, technologies, achievements, or "
+    "responsibilities.\n"
+    "- NEVER claim, imply, or hint at experience with a skill just because the job "
+    "description names it. If the résumé does not show it, it does not go in the letter.\n"
+    "- Do NOT restate the résumé line by line. Explain in natural prose why the real "
+    "experience fits this specific role.\n"
+    "- Say nothing about the company beyond what you are told -- no invented praise for "
+    "its products, mission, culture, scale, or reputation.\n"
+    "- Avoid cliché AI cover-letter phrasing: 'I am writing to express my keen interest', "
+    "'proven track record', 'passionate about leveraging', 'dynamic team player', "
+    "'perfect fit', 'hit the ground running', 'in today's fast-paced world'. No keyword "
+    "stuffing and no buzzword padding.\n"
+    "- Before answering, silently check every factual claim against the résumé material "
+    "and delete anything you cannot point to.\n"
+    "- Output ONLY the letter: salutation, body paragraphs, sign-off. No letterhead, "
+    "postal addresses, date, subject line, markdown, preamble, notes, or commentary."
+)
+
+
 class AIError(Exception):
     """Raised for any AI-generation problem (no key, bad model, API error)."""
 
@@ -98,8 +128,13 @@ def render_unavailable_notice() -> None:
 
 # --- Core call -----------------------------------------------------------------
 
-def _generate(prompt: str, temperature: float = 0.4) -> str:
-    """Send one prompt to the model (OpenRouter) and return the trimmed text."""
+def _generate(prompt: str, temperature: float = 0.4, *, system: Optional[str] = None) -> str:
+    """Send one prompt to the model (OpenRouter) and return the trimmed text.
+
+    `system` overrides the résumé-editor system prompt for tasks that aren't
+    résumé editing (the cover letter writes prose, not ATS bullet lines). The
+    never-invent rules are restated in every system prompt used here.
+    """
     key = _api_key()
     if not key:
         raise AIError("No OpenRouter API key configured.")
@@ -116,7 +151,7 @@ def _generate(prompt: str, temperature: float = 0.4) -> str:
         response = client.chat.completions.create(
             model=_model_name(),
             messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": system or _SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
             temperature=temperature,
@@ -328,6 +363,84 @@ def tailor_bullets(pairs: List[Tuple[str, str]]) -> List[str]:
         loose = _parse_bullets(text)
         parsed = loose if len(loose) == len(pairs) else originals
     return parsed
+
+
+def write_cover_letter(
+    *,
+    facts: str,
+    highlights: List[Tuple[str, str]],
+    covered_skills: List[str],
+    forbidden_skills: List[str],
+    company: str,
+    role: str,
+    candidate_name: str,
+    min_words: int = 250,
+    max_words: int = 350,
+    corrections: str = "",
+) -> str:
+    """The single LLM call behind the cover letter. Returns the raw letter text.
+
+    Everything the model sees has already been assembled and vetted by
+    utils.cover_letter: `facts` is the résumé's own content, `highlights` are the
+    (job requirement, supporting résumé bullet) pairs the retriever judged
+    strongest, `covered_skills` are skills the résumé genuinely evidences, and
+    `forbidden_skills` are the ones the job wants but the résumé does not show --
+    passed in explicitly so the model is told what it must not claim.
+
+    `corrections` carries the verifier's complaints on a second attempt (an
+    unsupported claim that slipped through, or a word count out of range).
+    """
+    if not facts.strip():
+        raise AIError("Add your experience, projects, or skills first -- there's nothing to write from yet.")
+
+    company = company.strip()
+    role = role.strip()
+    target = role or "the advertised role"
+
+    evidence_block = "\n".join(
+        f"{i}. THE JOB ASKS: {req}\n   RÉSUMÉ EVIDENCE: {bullet}"
+        for i, (req, bullet) in enumerate(highlights, 1)
+    ) or "(no requirement-level matches were retrieved -- rely on the résumé facts below)"
+
+    if company:
+        addressing = (
+            f"Name the role ({role or 'the advertised role'}) and the company ({company}) "
+            "in the opening. Address it 'Dear Hiring Manager' unless a named contact "
+            "appears in the job description."
+        )
+    else:
+        addressing = (
+            "The company name is not known, so do NOT guess or name one. Address the "
+            "letter 'Dear Hiring Manager' and refer to 'this role'."
+        )
+
+    prompt = (
+        f"Write a cover letter for {candidate_name or 'this candidate'} applying for {target}"
+        f"{f' at {company}' if company else ''}.\n\n"
+        f"{addressing}\n\n"
+        f"Length: {min_words}-{max_words} words. Shape it as a brief opening, two or three "
+        "body paragraphs built on the strongest matches below, and a short close. End with "
+        "a sign-off ('Sincerely,') and "
+        f"{'the name ' + candidate_name if candidate_name else 'the candidate name'} on its own line.\n\n"
+        "Build the letter around the STRONGEST MATCHES: each one pairs something this job "
+        "asks for with the résumé evidence that actually supports it. Turn those into "
+        "natural explanations of fit -- do not quote the bullets verbatim and do not walk "
+        "through the résumé section by section.\n\n"
+        f"STRONGEST MATCHES:\n{evidence_block}\n\n"
+        f"SKILLS THE RÉSUMÉ GENUINELY EVIDENCES (safe to mention):\n"
+        f"{', '.join(covered_skills) if covered_skills else '(none identified)'}\n\n"
+        "SKILLS THIS JOB WANTS BUT THE RÉSUMÉ DOES NOT SHOW -- never claim, imply, or "
+        "reference these as the candidate's own, and do not promise to learn them:\n"
+        f"{', '.join(forbidden_skills) if forbidden_skills else '(none)'}\n\n"
+        f"RÉSUMÉ FACTS (the only permitted source of claims):\n{facts}"
+    )
+    if corrections.strip():
+        prompt += (
+            "\n\nA previous draft was rejected by a verifier. Fix exactly these problems "
+            f"and change nothing else about the approach:\n{corrections.strip()}"
+        )
+
+    return _generate(prompt, temperature=0.5, system=_COVER_LETTER_SYSTEM)
 
 
 def suggest_improvements(resume: ResumeData, jd: str = "") -> str:
