@@ -35,4 +35,4 @@ jobs:
 
       - name: Import smoke test (catches broken imports)
         run: |
-          python -c "import models.resume_data, utils.session_manager, utils.validators, utils.date_picker, utils.navigation, utils.resume_parser, utils.ats_analyzer; print('imports OK')"
+          python -c "import models.resume_data, utils.session_manager, utils.validators, utils.date_picker, utils.resume_parser, utils.ats_analyzer; print('imports OK')"
