@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import os
 import re
-from typing import List, Optional, Tuple
+import time
+from typing import Any, List, Optional, Tuple
 
 import streamlit as st
 
@@ -27,7 +28,23 @@ from models.resume_data import ResumeData
 _LIST_NUMBER_RE = re.compile(r"^\d+[.)]\s+")
 
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
-_DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"  # Hunyuan 3 free tier on OpenRouter; override with OPENROUTER_MODEL
+_DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"  # free tier on OpenRouter; override with OPENROUTER_MODEL
+
+# Free-tier endpoints drop requests when the upstream provider is saturated, and
+# OpenRouter reports that as a *success* (HTTP 200) whose body carries `error`
+# and no `choices`. Retrying the same model usually clears it; when it doesn't,
+# a sibling free model does. Override the chain with OPENROUTER_FALLBACK_MODELS
+# (comma-separated), or set it empty to disable falling back.
+_DEFAULT_FALLBACK_MODELS = ("nvidia/nemotron-3-super-120b-a12b:free",)
+_MAX_ATTEMPTS = 3          # per model, including the first try
+_RETRY_BACKOFF_SECONDS = 1.5  # doubled on each retry
+
+# Substrings that mark a failure as worth retrying rather than reporting.
+_TRANSIENT_HINTS = (
+    "rate limit", "rate-limit", "429", "500", "502", "503", "504",
+    "timeout", "timed out", "temporarily", "overloaded", "capacity",
+    "unavailable", "no choices", "empty response", "connection",
+)
 
 _SYSTEM_PROMPT = (
     "You are an expert resume editor. You rewrite resume content to be concise, "
@@ -106,6 +123,24 @@ def _base_url() -> str:
     return _get_secret("OPENROUTER_BASE_URL") or _DEFAULT_BASE_URL
 
 
+def _model_chain() -> List[str]:
+    """The configured model first, then the fallbacks, de-duplicated.
+
+    Only the first model is used unless it fails every attempt -- the fallbacks
+    exist so a saturated free endpoint doesn't take the whole feature down.
+    """
+    raw = _get_secret("OPENROUTER_FALLBACK_MODELS")
+    if raw is None:
+        fallbacks = list(_DEFAULT_FALLBACK_MODELS)
+    else:
+        fallbacks = [m.strip() for m in raw.split(",") if m.strip()]
+    chain: List[str] = []
+    for model in [_model_name(), *fallbacks]:
+        if model and model not in chain:
+            chain.append(model)
+    return chain
+
+
 def is_configured() -> bool:
     """True if an OpenRouter API key is available, so AI features can run."""
     return bool(_api_key())
@@ -114,8 +149,8 @@ def is_configured() -> bool:
 def render_unavailable_notice() -> None:
     """Shown in place of AI controls when no API key is configured."""
     st.info(
-        "**AI features need an OpenRouter API key** (free with the "
-        "`tencent/hy3:free` model).\n\n"
+        "**AI features need an OpenRouter API key** (free with the default "
+        f"`{_DEFAULT_MODEL}` model).\n\n"
         "1. Get one at https://openrouter.ai/keys.\n"
         "2. **Locally:** add it to `.streamlit/secrets.toml` as "
         "`OPENROUTER_API_KEY = \"your-key\"` (this file is git-ignored).\n"
@@ -128,12 +163,51 @@ def render_unavailable_notice() -> None:
 
 # --- Core call -----------------------------------------------------------------
 
+def _response_error(response: Any) -> Optional[str]:
+    """Pull OpenRouter's error payload off an otherwise-successful response.
+
+    OpenRouter answers HTTP 200 with a body like `{"error": {"code": 429,
+    "message": "..."}}` and no `choices` when the *upstream provider* fails --
+    rate limits, capacity, moderation. The OpenAI client never raises for those,
+    so without reading `error` by hand the only symptom is an empty `choices`
+    list and the real reason is lost.
+    """
+    err = getattr(response, "error", None)
+    if err is None:
+        extra = getattr(response, "model_extra", None)
+        if isinstance(extra, dict):
+            err = extra.get("error")
+    if not err:
+        return None
+    if not isinstance(err, dict):
+        return str(err)
+    message = str(err.get("message") or "").strip()
+    metadata = err.get("metadata")
+    raw = ""
+    if isinstance(metadata, dict):
+        raw = str(metadata.get("raw") or "").strip()
+    detail = " -- ".join(p for p in (message, raw) if p) or "unknown upstream error"
+    code = err.get("code")
+    return f"{detail} (code {code})" if code is not None else detail
+
+
+def _is_transient(reason: str) -> bool:
+    """True if a failure is the kind that a retry (or another model) can clear."""
+    lowered = reason.lower()
+    return any(hint in lowered for hint in _TRANSIENT_HINTS)
+
+
 def _generate(prompt: str, temperature: float = 0.4, *, system: Optional[str] = None) -> str:
     """Send one prompt to the model (OpenRouter) and return the trimmed text.
 
     `system` overrides the résumé-editor system prompt for tasks that aren't
     résumé editing (the cover letter writes prose, not ATS bullet lines). The
     never-invent rules are restated in every system prompt used here.
+
+    Free endpoints fail intermittently, so each model in `_model_chain()` gets
+    `_MAX_ATTEMPTS` tries with exponential backoff before moving on. Only a
+    genuinely transient failure is retried -- a bad key, a bad model slug, or a
+    rejected prompt is reported immediately, with the provider's own wording.
     """
     key = _api_key()
     if not key:
@@ -142,43 +216,80 @@ def _generate(prompt: str, temperature: float = 0.4, *, system: Optional[str] = 
     # Imported lazily so a missing package never breaks unrelated pages.
     from openai import OpenAI
 
-    try:
-        client = OpenAI(
-            api_key=key,
-            base_url=_base_url(),
-            default_headers={"X-Title": "AI Resume Builder"},  # optional OpenRouter attribution
-        )
-        response = client.chat.completions.create(
-            model=_model_name(),
-            messages=[
-                {"role": "system", "content": system or _SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=temperature,
-            # hy3 is a reasoning model: it spends tokens "thinking" before it
-            # writes the answer, and those thinking tokens count against the
-            # budget. A small cap gets fully consumed by reasoning, leaving no
-            # room for the answer (empty content, finish_reason="length").
-            # So: a large total budget, plus a hard cap on reasoning tokens so
-            # the bulk is always left for the actual answer.
-            max_tokens=8000,
-            extra_body={"reasoning": {"max_tokens": 1200}},
-        )
-    except Exception as exc:  # noqa: BLE001 -- surface any API problem to the caller
-        raise AIError(str(exc)) from exc
+    client = OpenAI(
+        api_key=key,
+        base_url=_base_url(),
+        default_headers={"X-Title": "AI Resume Builder"},  # optional OpenRouter attribution
+        timeout=120.0,
+        max_retries=0,  # retries are handled below, so backoff and fallback stay in one place
+    )
 
-    if not response.choices:
-        raise AIError("The model returned no choices. Try again.")
-    choice = response.choices[0]
-    text = (choice.message.content or "").strip()
-    if not text:
-        if getattr(choice, "finish_reason", None) == "length":
-            raise AIError("The response was cut off before any text was produced. Try again.")
-        raise AIError(
-            "The model returned an empty response. Try again -- if it keeps happening, "
-            "the free tier may be busy; set OPENROUTER_MODEL to 'tencent/hy3'."
-        )
-    return text
+    chain = _model_chain()
+    last_reason = "no attempt was made"
+    last_transient = False
+    for model in chain:
+        for attempt in range(_MAX_ATTEMPTS):
+            reason = ""
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system or _SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=temperature,
+                    # These are reasoning models: they spend tokens "thinking"
+                    # before writing the answer, and those count against the
+                    # budget. A small cap gets fully consumed by reasoning,
+                    # leaving no room for the answer (empty content,
+                    # finish_reason="length"). So: a large total budget, plus a
+                    # hard cap on reasoning tokens so the bulk is always left
+                    # for the actual answer.
+                    max_tokens=8000,
+                    extra_body={"reasoning": {"max_tokens": 1200}},
+                )
+            except Exception as exc:  # noqa: BLE001 -- surface any API problem to the caller
+                reason = str(exc) or exc.__class__.__name__
+            else:
+                api_error = _response_error(response)
+                choices = getattr(response, "choices", None)
+                if not choices:
+                    # The defining symptom of an upstream failure returned as a
+                    # 200: report what the provider actually said, not just
+                    # "no choices".
+                    reason = api_error or "the model returned no choices"
+                else:
+                    choice = choices[0]
+                    message = getattr(choice, "message", None)
+                    text = (getattr(message, "content", None) or "").strip()
+                    if text:
+                        return text
+                    if getattr(choice, "finish_reason", None) == "length":
+                        reason = "the response was cut off before any text was produced"
+                    else:
+                        reason = api_error or "the model returned an empty response"
+
+            # Judge the raw reason, never the decorated one -- a model slug can
+            # contain digits that look like status codes.
+            last_reason = f"{reason} [model: {model}]"
+            last_transient = _is_transient(reason)
+            if not last_transient or attempt + 1 >= _MAX_ATTEMPTS:
+                break
+            time.sleep(_RETRY_BACKOFF_SECONDS * (2 ** attempt))
+
+        if not last_transient:
+            # A non-transient failure (bad key, bad slug, rejected prompt) will
+            # fail identically on every other model, so stop here.
+            break
+
+    hint = (
+        " The free tier is busy or your daily free-model quota is used up -- wait a minute "
+        "and retry, or set OPENROUTER_MODEL in your secrets to a paid model such as "
+        "'tencent/hy3'."
+        if last_transient
+        else ""
+    )
+    raise AIError(f"{last_reason}.{hint}")
 
 
 def _parse_bullets(text: str) -> List[str]:
