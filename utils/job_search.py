@@ -7,8 +7,8 @@ Sources:
 - **We Work Remotely** -- remote-only board, public RSS feed.
 - **Company ATS boards** -- a curated list of well-known companies whose jobs
   are hosted on **Greenhouse** or **Lever** (each board is public). There is no
-  free API to search *all* ATS boards, so we pull a fixed set and filter by the
-  search title.
+  free API to search *all* ATS boards, so we pull a fixed set and filter
+  client-side by title, location, work type and industry keywords.
 
 Remote-only boards are queried for "Any"/"Remote" work types. ATS boards carry
 on-site/hybrid/remote roles, so they're queried for every work type. All network
@@ -69,33 +69,54 @@ _CURRENCY = {
 
 WORK_TYPES = ["Any", "Remote", "Hybrid", "On-site"]
 
-# Industry -> (Adzuna category tag, Remotive category slug). Other sources have
-# no matching taxonomy and are filtered by title only.
+# Industry -> (Adzuna category tag, Remotive category slug, generic keywords).
+# RemoteOK, We Work Remotely, Greenhouse and Lever have no matching taxonomy, so
+# for those the keywords are matched against the job's own title/description.
 INDUSTRIES = {
-    "Any": (None, None),
-    "Software Development": ("it-jobs", "software-dev"),
-    "Data & Analytics": ("it-jobs", "data"),
-    "Engineering": ("engineering-jobs", None),
-    "Design": ("creative-design-jobs", "design"),
-    "Product": (None, "product"),
-    "DevOps / Sysadmin": ("it-jobs", "devops"),
-    "Marketing": ("pr-advertising-marketing-jobs", "marketing"),
-    "Sales": ("sales-jobs", "sales"),
-    "Finance & Legal": ("accounting-finance-jobs", "finance-legal"),
-    "Customer Support": ("customer-services-jobs", "customer-support"),
-    "Human Resources": ("hr-jobs", "hr"),
-    "QA": ("scientific-qa-jobs", "qa"),
-    "Healthcare": ("healthcare-nursing-jobs", None),
-    "Teaching": ("teaching-jobs", None),
+    "Any": (None, None, None),
+    "Software Development": ("it-jobs", "software-dev",
+                              ["software engineer", "software developer", "backend", "frontend",
+                               "full stack", "programmer"]),
+    "Data & Analytics": ("it-jobs", "data",
+                         ["data scientist", "data engineer", "data analyst", "analytics",
+                          "machine learning", "ml engineer"]),
+    "Engineering": ("engineering-jobs", None, ["engineer", "engineering"]),
+    "Design": ("creative-design-jobs", "design", ["designer", "design", "ux", "ui"]),
+    "Product": (None, "product", ["product manager", "product owner", "product"]),
+    "DevOps / Sysadmin": ("it-jobs", "devops",
+                          ["devops", "sysadmin", "site reliability", "sre", "platform engineer",
+                           "infrastructure"]),
+    "Marketing": ("pr-advertising-marketing-jobs", "marketing",
+                 ["marketing", "growth", "seo", "content marketing", "brand"]),
+    "Sales": ("sales-jobs", "sales",
+             ["sales", "account executive", "business development", "account manager"]),
+    "Finance & Legal": ("accounting-finance-jobs", "finance-legal",
+                        ["finance", "accounting", "accountant", "legal", "counsel",
+                         "financial analyst"]),
+    "Customer Support": ("customer-services-jobs", "customer-support",
+                         ["customer support", "customer service", "support specialist",
+                          "customer success"]),
+    "Human Resources": ("hr-jobs", "hr",
+                        ["human resources", "hr", "recruiter", "recruiting",
+                         "talent acquisition", "people operations"]),
+    "QA": ("scientific-qa-jobs", "qa",
+          ["quality assurance", "qa engineer", "test engineer", "sdet", "qa analyst"]),
+    "Healthcare": ("healthcare-nursing-jobs", None,
+                   ["nurse", "healthcare", "clinical", "medical", "physician"]),
+    "Teaching": ("teaching-jobs", None, ["teacher", "teaching", "tutor", "instructor", "professor"]),
 }
 
 
 def _adzuna_category(industry: str) -> Optional[str]:
-    return INDUSTRIES.get(industry, (None, None))[0]
+    return INDUSTRIES.get(industry, (None, None, None))[0]
 
 
 def _remotive_category(industry: str) -> Optional[str]:
-    return INDUSTRIES.get(industry, (None, None))[1]
+    return INDUSTRIES.get(industry, (None, None, None))[1]
+
+
+def _industry_keywords(industry: str) -> Optional[List[str]]:
+    return INDUSTRIES.get(industry, (None, None, None))[2]
 
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -294,6 +315,63 @@ def _is_relevant(job_title: str, extra: str, tokens: List[str]) -> bool:
     return any(tok in haystack for tok in tokens)
 
 
+_REMOTE_LOCATION_RE = re.compile(r"remote|anywhere|worldwide|global")
+
+
+def _location_tokens(location: str) -> List[str]:
+    return [w for w in re.split(r"[^a-z0-9]+", location.lower()) if len(w) > 1]
+
+
+def _matches_location(job_location: str, tokens: List[str]) -> bool:
+    """Keep a job only if its location matches the search, or it's remote/global.
+
+    Adzuna geocodes `where` itself, but every other source (Remotive, RemoteOK,
+    We Work Remotely, Greenhouse, Lever) has no server-side location search, so
+    without this they'd return jobs from anywhere regardless of what the user
+    typed. A listing tagged remote/worldwide always passes, since it isn't tied
+    to a specific place.
+    """
+    if not tokens:
+        return True
+    haystack = job_location.lower()
+    if _REMOTE_LOCATION_RE.search(haystack):
+        return True
+    return any(tok in haystack for tok in tokens)
+
+
+def _matches_industry(text: str, keywords: Optional[List[str]]) -> bool:
+    """Keep a job only if a keyword for the chosen industry appears in its text.
+
+    Adzuna and Remotive have a real category taxonomy (`_adzuna_category` /
+    `_remotive_category`), but RemoteOK, We Work Remotely, Greenhouse and Lever
+    don't, so without this an industry pick has zero effect on them.
+    """
+    if not keywords:
+        return True
+    haystack = text.lower()
+    return any(re.search(r"\b" + re.escape(kw) + r"\b", haystack) for kw in keywords)
+
+
+def _matches_work_type(job_location: str, work_type: str) -> bool:
+    """Best-effort remote/hybrid/on-site filter, inferred from location text.
+
+    Greenhouse and Lever boards are queried for every work type and carry no
+    explicit remote/hybrid/on-site field, so without this a "Remote" or
+    "On-site" pick has zero effect on them -- everything from those ~20 company
+    boards would show regardless of what was chosen.
+    """
+    if work_type == "Any":
+        return True
+    text = job_location.lower()
+    is_remote = bool(_REMOTE_LOCATION_RE.search(text))
+    is_hybrid = "hybrid" in text
+    if work_type == "Remote":
+        return is_remote
+    if work_type == "Hybrid":
+        return is_hybrid
+    return not is_remote and not is_hybrid  # "On-site"
+
+
 # --- Source: Adzuna ------------------------------------------------------------
 
 def _format_salary(country: str, lo, hi) -> str:
@@ -359,12 +437,20 @@ def search_adzuna(title: str, location: str, country: str, work_type: str,
         posted=(item.get("created") or "")[:10],
         description=strip_html(item.get("description")),
     ) for item in data.get("results", [])]
+
+    # A few industries (e.g. "Product") have no Adzuna category tag, so the API
+    # call above can't scope by them server-side -- fall back to a keyword check.
+    if not category:
+        keywords = _industry_keywords(industry)
+        if keywords:
+            jobs = [j for j in jobs if _matches_industry(f"{j.title} {j.description}", keywords)]
     return jobs, None
 
 
 # --- Source: Remotive ----------------------------------------------------------
 
-def search_remotive(title: str, industry: str = "Any") -> Tuple[List[JobPosting], Optional[str]]:
+def search_remotive(title: str, industry: str = "Any",
+                    location: str = "") -> Tuple[List[JobPosting], Optional[str]]:
     """Query Remotive (remote-only, no auth)."""
     params = {"search": title.strip()}
     category = _remotive_category(industry)
@@ -382,21 +468,32 @@ def search_remotive(title: str, industry: str = "Any") -> Tuple[List[JobPosting]
         return [], "Remotive returned an unreadable response."
 
     tokens = _query_tokens(title)
+    loc_tokens = _location_tokens(location)
+    # A few industries (e.g. "Engineering", "Healthcare", "Teaching") have no
+    # Remotive category slug, so the API call above can't scope by them
+    # server-side -- fall back to a keyword check on title + description.
+    keywords = _industry_keywords(industry) if not category else None
     jobs = []
     for item in data.get("jobs", []):
         job_title = (item.get("title") or "").strip()
         if not _is_relevant(job_title, item.get("category") or "", tokens):
             continue
+        job_location = (item.get("candidate_required_location") or "Remote").strip()
+        if not _matches_location(job_location, loc_tokens):
+            continue
+        description = strip_html(item.get("description"))
+        if keywords and not _matches_industry(f"{job_title} {description}", keywords):
+            continue
         jobs.append(JobPosting(
             title=job_title,
             company=(item.get("company_name") or "").strip(),
-            location=(item.get("candidate_required_location") or "Remote").strip(),
+            location=job_location,
             url=(item.get("url") or "").strip(),
             source="Remotive",
             salary=(item.get("salary") or "").strip(),
             job_type=(item.get("job_type") or "").replace("_", " "),
             posted=(item.get("publication_date") or "")[:10],
-            description=strip_html(item.get("description")),
+            description=description,
         ))
     return jobs, None
 
@@ -540,22 +637,32 @@ def search_jobs(title: str, location: str, country: str, work_type: str,
     """
     result = SearchResult(adzuna_configured=adzuna_configured())
     tokens = _query_tokens(title)
+    loc_tokens = _location_tokens(location)
+    industry_keywords = _industry_keywords(industry)
     creds = _adzuna_creds()  # resolved on the main thread, then passed into workers
     remote_ok = work_type in ("Any", "Remote")
 
     def filt(jobs: List[JobPosting]) -> List[JobPosting]:
         # These boards aren't searched server-side, so filter precisely: require
         # every query word to appear in the title (a "data engineer" search must
-        # not return every "engineer" role).
-        if not tokens:
-            return jobs
-        return [j for j in jobs if all(tok in j.title.lower() for tok in tokens)]
+        # not return every "engineer" role); the location to match (or be
+        # remote/worldwide) when the user gave one; the inferred work type to
+        # match; and an industry keyword to appear when one was chosen.
+        out = jobs
+        if tokens:
+            out = [j for j in out if all(tok in j.title.lower() for tok in tokens)]
+        if loc_tokens:
+            out = [j for j in out if _matches_location(j.location, loc_tokens)]
+        out = [j for j in out if _matches_work_type(j.location, work_type)]
+        if industry_keywords:
+            out = [j for j in out if _matches_industry(f"{j.title} {j.description}", industry_keywords)]
+        return out
 
     def task_adzuna():
         return search_adzuna(title, location, country, work_type, industry, creds=creds)
 
     def task_remotive():
-        return search_remotive(title, industry)
+        return search_remotive(title, industry, location)
 
     def task_remoteok():
         try:
