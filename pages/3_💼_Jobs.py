@@ -1,12 +1,14 @@
 """Jobs: search live openings by title, location and work type; get apply links.
 
-Inputs (job title, location, work type, country) are sent to free, official job
-APIs via utils.job_search. Results are shown as cards, each linking to the real
-posting. Each card lists which of the job's named skills the résumé already
-covers and which are missing, and two one-click handoffs load the job's full
-description into ATS Match (for a semantic breakdown) or into Cover Letter (to
-write a grounded letter for that job). Nothing is applied to or sent on the
-user's behalf -- links only.
+Inputs (job title, location, work type) are sent to free, official job APIs via
+utils.job_search -- "Location" is a single free-text field (city, state, country,
+anything); a country code for Adzuna is guessed from it via `infer_country`.
+Results are shown as cards, each linking to the real posting. Each card lists
+which of the job's named skills the résumé already covers and which are
+missing, and two one-click handoffs load the job's full description into ATS
+Match (for a semantic breakdown) or into Cover Letter (to write a grounded
+letter for that job). Nothing is applied to or sent on the user's behalf --
+links only.
 """
 from html import escape
 
@@ -14,9 +16,8 @@ import streamlit as st
 
 from utils import ats_analyzer, job_search
 from utils.job_search import (
-    COUNTRIES,
-    INDUSTRIES,
     WORK_TYPES,
+    infer_country,
     posted_days,
     search_jobs,
     skills_in_text,
@@ -52,10 +53,9 @@ def _safe_link(url: str) -> str:
 PAGE_SIZE = 10
 
 
-def run_search(title: str, location: str, country: str, work_type: str,
-               industry: str = "Any") -> None:
+def run_search(title: str, location: str, work_type: str) -> None:
     """Fetch jobs; per job, split its named skills into matched vs missing; sort."""
-    result = search_jobs(title, location, country, work_type, industry)
+    result = search_jobs(title, location, infer_country(location), work_type)
     has_resume = bool(resume_text.strip())
     for job in result.jobs:
         # The job's own named skills (from its title + description), then split by
@@ -95,7 +95,7 @@ def _freshness_label(days) -> str:
 # Auto-search handoff from the Dashboard's "Search jobs for this résumé" button.
 if st.session_state.pop("auto_job_search", False) and default_title.strip():
     with st.spinner("Searching openings for your résumé..."):
-        run_search(default_title, default_location, "gb", "Any")
+        run_search(default_title, default_location, "Any")
 
 # --- Search form --------------------------------------------------------------
 with st.form("job_search_form"):
@@ -105,21 +105,11 @@ with st.form("job_search_form"):
                               placeholder="e.g. Data Engineer")
     with c2:
         location = st.text_input("Location", value=default_location,
-                                placeholder="e.g. London")
+                                placeholder="e.g. London, or Remote, NY, Germany...")
 
-    c3, c4, c5 = st.columns(3)
+    c3, _sp = st.columns([1, 2])
     with c3:
         work_type = st.selectbox("Work type", WORK_TYPES, index=0)
-    with c4:
-        industry = st.selectbox("Industry", list(INDUSTRIES.keys()), index=0,
-                                help="Narrows results to a job category. Leave as Any to search all.")
-    with c5:
-        country_code = st.selectbox(
-            "Country", list(COUNTRIES.keys()),
-            format_func=lambda code: COUNTRIES[code],
-            index=list(COUNTRIES.keys()).index("gb"),
-            help="Which country Adzuna searches. Remote results aren't limited by this.",
-        )
 
     searched = st.form_submit_button("Search jobs", type="primary")
 
@@ -128,7 +118,7 @@ if searched:
         st.warning("Enter a job title to search.")
     else:
         with st.spinner("Searching openings..."):
-            run_search(title, location, country_code, work_type, industry)
+            run_search(title, location, work_type)
 
 # --- Results ------------------------------------------------------------------
 result = st.session_state.get("job_results")

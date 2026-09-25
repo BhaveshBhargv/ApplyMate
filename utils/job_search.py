@@ -53,7 +53,8 @@ _GREENHOUSE = [
 _LEVER = ["spotify", "binance"]
 _LEVER_NAMES = {"spotify": "Spotify", "binance": "Binance"}
 
-# Country code -> display name, for the picker. Adzuna scopes search by country.
+# Country code -> display name. Adzuna scopes search by country; there's no UI
+# picker for it (just the one "Location" field) so `infer_country` guesses one.
 COUNTRIES = {
     "gb": "United Kingdom", "us": "United States", "ca": "Canada", "au": "Australia",
     "de": "Germany", "fr": "France", "nl": "Netherlands", "in": "India",
@@ -66,6 +67,36 @@ _CURRENCY = {
     "nl": "€", "it": "€", "at": "€", "in": "₹", "sg": "S$", "nz": "NZ$",
     "pl": "zł", "za": "R",
 }
+
+# Free-text phrases -> Adzuna country code, for guessing the country from
+# whatever the user typed into "Location" (a city, state, country -- anything).
+_COUNTRY_ALIASES = {
+    "united kingdom": "gb", "great britain": "gb", "britain": "gb", "uk": "gb",
+    "england": "gb", "scotland": "gb", "wales": "gb", "northern ireland": "gb",
+    "united states": "us", "usa": "us", "u.s.a.": "us", "u.s.": "us", "america": "us",
+    "canada": "ca", "australia": "au", "germany": "de", "deutschland": "de",
+    "france": "fr", "netherlands": "nl", "holland": "nl", "india": "in",
+    "singapore": "sg", "new zealand": "nz", "italy": "it", "poland": "pl",
+    "austria": "at", "south africa": "za",
+}
+_DEFAULT_COUNTRY = "gb"
+
+
+def infer_country(location: str, default: str = _DEFAULT_COUNTRY) -> str:
+    """Guess an Adzuna country code from free-text location, else `default`.
+
+    Adzuna's API is scoped by country in the URL path, but the UI only exposes
+    one "Location" field (city, state, country -- anything), so this recovers a
+    country code from it when possible; other sources aren't country-scoped.
+    """
+    text = location.lower()
+    for alias, code in _COUNTRY_ALIASES.items():
+        if re.search(r"\b" + re.escape(alias) + r"\b", text):
+            return code
+    for code, name in COUNTRIES.items():
+        if re.search(r"\b" + re.escape(name.lower()) + r"\b", text):
+            return code
+    return default
 
 WORK_TYPES = ["Any", "Remote", "Hybrid", "On-site"]
 

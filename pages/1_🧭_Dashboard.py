@@ -32,21 +32,22 @@ with edit_col:
     if not role:
         st.caption("Add a role under **Experience** to search by job title.")
 
-    tab_personal, tab_edu, tab_exp, tab_proj, tab_skills, tab_import = st.tabs(
-        ["Personal", "Education", "Experience", "Projects", "Skills", "Import"]
-    )
-    with tab_personal:
-        forms.render_personal()
-    with tab_edu:
-        forms.render_education()
-    with tab_exp:
-        forms.render_experience()
-    with tab_proj:
-        forms.render_projects()
-    with tab_skills:
-        forms.render_skills()
-    with tab_import:
-        forms.render_import()
+    with st.container(key="dash_tabs"):
+        tab_personal, tab_edu, tab_exp, tab_proj, tab_skills, tab_import = st.tabs(
+            ["Personal", "Education", "Experience", "Projects", "Skills", "Import"]
+        )
+        with tab_personal:
+            forms.render_personal()
+        with tab_edu:
+            forms.render_education()
+        with tab_exp:
+            forms.render_experience()
+        with tab_proj:
+            forms.render_projects()
+        with tab_skills:
+            forms.render_skills()
+        with tab_import:
+            forms.render_import()
 
 # --- Right: live preview ------------------------------------------------------
 with preview_col:
