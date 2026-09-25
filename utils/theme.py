@@ -36,7 +36,7 @@ _CSS = f"""
 :root {{
   --bg: {BG}; --surface: {SURFACE}; --text: {TEXT}; --muted: {MUTED}; --subtle: {SUBTLE};
   --line: {LINE}; --accent: {ACCENT}; --accent-ink: {ACCENT_INK}; --wash: {WASH};
-  --chip-border: {CHIP_BORDER}; --btn: {BTN}; --btn-hover: {BTN_HOVER}; --gap: {GAP};
+  --chip-border: {CHIP_BORDER}; --btn: {BTN}; --btn-hover: {BTN_HOVER}; --gap: {GAP}; --import: {IMPORT};
   --ui: "Geist", -apple-system, "Segoe UI", system-ui, sans-serif;
   --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
   --display: "Geist", system-ui, sans-serif;
