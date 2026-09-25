@@ -115,13 +115,9 @@ input::placeholder, textarea::placeholder {{ color: var(--subtle); }}
 [data-baseweb="tab"][aria-selected="true"] {{ color: var(--text); }}
 [data-baseweb="tab-highlight"] {{ background-color: var(--accent) !important; }}
 
-/* The Dashboard's "Import" tab -- the fastest way to fill a résumé, so it's
-   bigger and emerald-highlighted to stand out from the plain section tabs.
-   It's the last *button* in the tab list, but baseweb appends a trailing
-   [data-baseweb="tab-highlight"] div after it, so :last-child itself lands on
-   that div -- nth-last-child(2) is the actual last tab button. */
+
 .st-key-dash_tabs [data-baseweb="tab-list"] button:nth-last-child(2) {{
-  background: var(--wash); border: 1px solid var(--chip-border); border-radius: 8px 8px 0 0;
+  background: var(--gap); border: 1px solid var(--chip-border); border-radius: 8px 8px 0 0;
   padding: 0 16px; margin-bottom: -1px; }}
 .st-key-dash_tabs [data-baseweb="tab-list"] button:nth-last-child(2) p {{
   font-size: 0.98rem; font-weight: 700; color: var(--accent-ink); }}

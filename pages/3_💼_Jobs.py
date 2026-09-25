@@ -105,7 +105,7 @@ with st.form("job_search_form"):
                               placeholder="e.g. Data Engineer")
     with c2:
         location = st.text_input("Location", value=default_location,
-                                placeholder="e.g. London, or Remote, NY, Germany...")
+                                placeholder="e.g. London, NY, Germany...")
 
     c3, _sp = st.columns([1, 2])
     with c3:
