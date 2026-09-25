@@ -52,7 +52,69 @@ def _extract_pdf_text(file_bytes: bytes) -> str:
     from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(file_bytes))
-    return "\n".join(page.extract_text() or "" for page in reader.pages)
+    return "\n".join(_extract_pdf_page_text(page) for page in reader.pages)
+
+
+def _extract_pdf_page_text(page) -> str:
+    """Extract one page's text, preserving reading order for narrow-sidebar
+    résumé templates (a slim label column -- CONTACT, EXPERIENCE, EDUCATION...
+    -- beside a wide content column).
+
+    pypdf's default extraction follows the PDF content stream's write order,
+    which for these templates groups every sidebar label together ahead of
+    every column's content, misfiling entire sections. "layout" mode instead
+    reconstructs each output line from actual character positions, so a
+    sidebar label lands on the same line as the content beside it -- which in
+    turn glues the two together (undone below by _split_glued_sidebar_lines)
+    and can occasionally merge two tightly-kerned words with no space between
+    them. That's a minor readability glitch, not lost or misfiled content,
+    and a fair trade for whole sections landing in the right place.
+    """
+    plain = page.extract_text() or ""
+    try:
+        layout = page.extract_text(extraction_mode="layout") or ""
+    except Exception:  # noqa: BLE001 -- fall back to plain extraction
+        return plain
+    if len(layout.strip()) < 0.5 * len(plain.strip()):
+        return plain  # layout mode produced far less text; trust plain instead
+
+    split = _split_glued_sidebar_lines(layout)
+    return "\n".join(re.sub(r" {2,}", " ", line).rstrip() for line in split.splitlines())
+
+
+# A sidebar label glued onto its content row by layout-mode extraction: a
+# short leading token, then a wide run of column-alignment spaces (real
+# inter-word gaps within justified body text are never this wide), then the
+# row's actual content.
+_GLUED_HEADER_RE = re.compile(r"^(\s*)(\S(?:.*\S)?)(\s{14,})(\S.*)$")
+_NO_SPLIT_LABELS = {
+    "contact", "contact info", "contact information", "contact details",
+    "personal info", "personal information", "details",
+}
+
+
+def _split_glued_sidebar_lines(text: str) -> str:
+    """Pull a glued sidebar label back onto its own line.
+
+    Undoes exactly the side effect _extract_pdf_page_text relies on layout
+    mode for: a label like "EDUCATION" landing on the same output line as
+    the content beside it, which would otherwise never be short/standalone
+    enough for _looks_like_header to recognize as a section boundary.
+    "Contact"-like labels are left glued -- their info stays part of the
+    preamble that parse_personal_info scans, same as today.
+    """
+    out_lines: List[str] = []
+    for line in text.splitlines():
+        match = _GLUED_HEADER_RE.match(line)
+        if match:
+            label, rest = match.group(2), match.group(4)
+            normalized = re.sub(r"[^a-z ]", "", label.lower()).strip()
+            if _looks_like_header(label) and normalized not in _NO_SPLIT_LABELS:
+                out_lines.append(label)
+                out_lines.append(rest)
+                continue
+        out_lines.append(line)
+    return "\n".join(out_lines)
 
 
 def _extract_docx_text(file_bytes: bytes) -> str:
@@ -123,6 +185,39 @@ def _looks_like_header(line: str) -> bool:
     return _canonical_section(stripped) is not None
 
 
+def _merge_wrapped_headers(
+    headers: List[Tuple[int, str]]
+) -> Tuple[List[Tuple[int, str]], set]:
+    """Merge a section label that word-wraps across two consecutive header
+    lines (e.g. "PROFESSIONAL" / "EXPERIENCE" from a narrow sidebar column)
+    back into the one recognized header their join spells out -- otherwise
+    the content between them would land in a same-named-but-unrecognized
+    section instead of the real one. Only fires when the *combined* text
+    matches a known alias that neither line matches alone, so two genuinely
+    separate custom headings are never merged on a guess.
+
+    Returns the merged header list, plus the set of original line numbers
+    absorbed into a merge (so their now-redundant label text can be dropped
+    from the section body by the caller).
+    """
+    merged: List[Tuple[int, str]] = []
+    consumed: set = set()
+    i = 0
+    while i < len(headers):
+        line_no, header_text = headers[i]
+        if i + 1 < len(headers) and _canonical_section(header_text) is None:
+            next_line_no, next_text = headers[i + 1]
+            combined = f"{header_text} {next_text}"
+            if _canonical_section(combined) is not None:
+                merged.append((line_no, combined))
+                consumed.add(next_line_no)
+                i += 2
+                continue
+        merged.append((line_no, header_text))
+        i += 1
+    return merged, consumed
+
+
 def split_into_sections(text: str) -> Tuple[str, Dict[str, str], Dict[str, str]]:
     """Split resume text into (preamble, known_sections, extra_sections).
 
@@ -134,11 +229,12 @@ def split_into_sections(text: str) -> Tuple[str, Dict[str, str], Dict[str, str]]
     recognized section -- e.g. "Certifications", "Awards", "Languages".
     """
     lines = text.splitlines()
-    headers = [(i, line.strip()) for i, line in enumerate(lines) if _looks_like_header(line)]
+    raw_headers = [(i, line.strip()) for i, line in enumerate(lines) if _looks_like_header(line)]
 
-    if not headers:
+    if not raw_headers:
         return text.strip(), {}, {}
 
+    headers, consumed = _merge_wrapped_headers(raw_headers)
     preamble = "\n".join(lines[: headers[0][0]]).strip()
 
     known: Dict[str, str] = {}
@@ -146,7 +242,8 @@ def split_into_sections(text: str) -> Tuple[str, Dict[str, str], Dict[str, str]]
     for idx, (line_no, header_text) in enumerate(headers):
         start = line_no + 1
         end = headers[idx + 1][0] if idx + 1 < len(headers) else len(lines)
-        block = "\n".join(lines[start:end]).strip()
+        block_lines = [ln for i, ln in enumerate(lines[start:end], start=start) if i not in consumed]
+        block = "\n".join(block_lines).strip()
         if not block:
             continue
         canonical = _canonical_section(header_text)
@@ -300,7 +397,11 @@ _BULLET_RE = re.compile(r"^\s*[•‣◦▪▸●○*]\s+|^\s*[-‐‑‒–—�
 # The middle dot / pipe separators that join a title to its organisation on a
 # single header line: "Degree · Institution", "Job Title | Company".
 _ORG_SEPARATORS = ("·", "|", "•")
-_BARE_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
+# No \b before the year: a PDF extraction can glue a preceding label straight
+# onto it with no space (e.g. a decorative "I" used as a separator producing
+# "I2022"), and \w-\w has no boundary there. A digit lookbehind still blocks
+# matching the tail of a longer number.
+_BARE_YEAR_RE = re.compile(r"(?<!\d)(?:19|20)\d{2}\b")
 _INPROGRESS_RE = re.compile(r"in progress|present|current|ongoing|expected|now", re.IGNORECASE)
 
 
@@ -372,6 +473,13 @@ def _split_entries(section_text: str) -> List[str]:
     return blocks
 
 
+# A compact "Title, Company" / "Degree, Institution" header is short; a line
+# past this many words is far more likely an ordinary sentence that merely
+# happens to contain a comma (e.g. a paragraph-style bullet with no real
+# title/company line at all), so ", " is not trusted as a separator past it.
+_MAX_WORDS_FOR_COMMA_SPLIT = 10
+
+
 def _split_header(header: str) -> Tuple[str, str]:
     """Split an entry header into (left, right) around its organisation
     separator, after stripping out the trailing date/duration. For
@@ -384,9 +492,12 @@ def _split_header(header: str) -> Tuple[str, str]:
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" \t·|,-‐‑‒–—―")
 
     for sep in (" · ", " | ", " — ", " – ", " - ", ", ", " at ", " @ "):
-        if sep in cleaned:
-            left, right = cleaned.split(sep, 1)
-            return left.strip(" \t·|,-‐‑‒–—―"), right.strip(" \t·|,-‐‑‒–—―")
+        if sep not in cleaned:
+            continue
+        if sep == ", " and len(cleaned.split()) > _MAX_WORDS_FOR_COMMA_SPLIT:
+            continue
+        left, right = cleaned.split(sep, 1)
+        return left.strip(" \t·|,-‐‑‒–—―"), right.strip(" \t·|,-‐‑‒–—―")
     # Fall back to the bare separators without surrounding spaces.
     for sep in ("·", "|"):
         if sep in cleaned:
@@ -429,7 +540,7 @@ _DEGREE_WORD_RE = re.compile(
 # ... and short uppercase degree codes (BE, B.S, M.A) matched case-sensitively,
 # so the ordinary lowercase English words "be"/"ms"/"ma" don't false-positive.
 _DEGREE_CODE_RE = re.compile(r"\b(?:B|M)\.?(?:E|S|A|Tech|Sc)\b")
-_GPA_RE = re.compile(r"(?:gpa|cgpa)[:\s]*([\d]{1,2}\.\d{1,2})", re.IGNORECASE)
+_GPA_RE = re.compile(r"(?:gpa|cgpa)[:\s-]*(\d{1,3}(?:\.\d{1,2})?)", re.IGNORECASE)
 
 
 def _has_degree_kw(text: str) -> bool:
@@ -465,8 +576,17 @@ def parse_education(section_text: str) -> List[EducationEntry]:
         if right:
             # Single-line header ("Degree · Institution"): the side carrying a
             # degree keyword is the degree, the other is the institution.
+            later_degree = next((ln for ln in info[1:] if _has_degree_kw(ln)), None)
             if _has_degree_kw(right) and not _has_degree_kw(left):
                 entry.degree, entry.institution = right, left
+            elif _has_degree_kw(left) and not _has_degree_kw(right):
+                entry.degree, entry.institution = left, right
+            elif later_degree:
+                # Neither side of a weak ", "-based split names a degree, but
+                # a later line does (e.g. its own "Bachelor of Engineering in
+                # ..." line) -- trust that over guessing from the split, and
+                # assume the split's left side is the institution.
+                entry.institution, entry.degree = left, later_degree
             else:
                 entry.degree, entry.institution = left, right
         else:
@@ -505,7 +625,15 @@ def parse_experience(section_text: str) -> List[ExperienceEntry]:
         header = info[0] if info else lines[0]
         entry.job_title, entry.company = _split_header(header)
 
-        entry.bullet_points = [_strip_bullet(ln) for ln in lines if _is_bullet(ln)]
+        bullets = [_strip_bullet(ln) for ln in lines if _is_bullet(ln)]
+        if not bullets:
+            # No explicit bullet glyphs -- common when a PDF's wrapped
+            # sentences lose their bullet marker in extraction (it renders as
+            # a vector glyph pypdf can't map back to a character). Fall back
+            # to every remaining descriptive line so the description isn't
+            # silently dropped.
+            bullets = [ln for ln in lines if ln != header and not _is_url_only(ln) and not _is_date_only(ln)]
+        entry.bullet_points = bullets
         entries.append(entry)
     return entries
 
@@ -541,7 +669,14 @@ def parse_projects(section_text: str) -> List[ProjectEntry]:
             match = _TECH_LINE_RE.search(tech_line)
             entry.technologies = [t.strip() for t in _split_top_level(match.group(1))]
 
-        entry.bullet_points = [_strip_bullet(ln) for ln in lines if _is_bullet(ln)]
+        bullets = [_strip_bullet(ln) for ln in lines if _is_bullet(ln)]
+        if not bullets:
+            # See parse_experience: no bullet glyphs survived extraction, so
+            # fall back to every remaining descriptive line instead of
+            # dropping the project's write-up.
+            skip = {header, url_line, tech_line}
+            bullets = [ln for ln in lines if ln not in skip and not _is_date_only(ln)]
+        entry.bullet_points = bullets
         entries.append(entry)
     return entries
 
