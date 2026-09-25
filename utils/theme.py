@@ -25,6 +25,7 @@ CHIP_BORDER = "#A7F3D0"   # emerald-200
 BTN = "#18181B"           # near-black button fill
 BTN_HOVER = "#27272A"     # zinc-800 -- button hover
 GAP = "#E11D48"           # rose-600 -- ATS "missing" (semantic only)
+IMPORT = "#000000"        # black -- import button fill
 
 # Back-compat aliases.
 INK = TEXT
@@ -117,7 +118,7 @@ input::placeholder, textarea::placeholder {{ color: var(--subtle); }}
 
 
 .st-key-dash_tabs [data-baseweb="tab-list"] button:nth-last-child(2) {{
-  background: var(--gap); border: 1px solid var(--chip-border); border-radius: 8px 8px 0 0;
+  background: var(--import); border: 1px solid var(--chip-border); border-radius: 8px 8px 0 0;
   padding: 0 16px; margin-bottom: -1px; }}
 .st-key-dash_tabs [data-baseweb="tab-list"] button:nth-last-child(2) p {{
   font-size: 0.98rem; font-weight: 700; color: var(--accent-ink); }}
