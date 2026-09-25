@@ -79,7 +79,8 @@ def _extract_pdf_page_text(page) -> str:
         return plain  # layout mode produced far less text; trust plain instead
 
     split = _split_glued_sidebar_lines(layout)
-    return "\n".join(re.sub(r" {2,}", " ", line).rstrip() for line in split.splitlines())
+    collapsed = "\n".join(re.sub(r" {2,}", " ", line).rstrip() for line in split.splitlines())
+    return _split_inline_colon_headers(collapsed)
 
 
 # A sidebar label glued onto its content row by layout-mode extraction: a
@@ -102,17 +103,51 @@ def _split_glued_sidebar_lines(text: str) -> str:
     enough for _looks_like_header to recognize as a section boundary.
     "Contact"-like labels are left glued -- their info stays part of the
     preamble that parse_personal_info scans, same as today.
+
+    A label that itself word-wraps across two sidebar rows (e.g. "PAPER" /
+    "PUBLISHED", or "PROFESSIONAL" / "EXPERIENCE") produces two separate
+    synthetic header lines back to back; when the first of those isn't
+    already a recognized section on its own, the second is folded into it
+    (both label and content) instead of starting a new section, so the pair
+    reads as the one heading it visually is.
     """
     out_lines: List[str] = []
+    pending_header_idx: Optional[int] = None
     for line in text.splitlines():
         match = _GLUED_HEADER_RE.match(line)
         if match:
             label, rest = match.group(2), match.group(4)
             normalized = re.sub(r"[^a-z ]", "", label.lower()).strip()
             if _looks_like_header(label) and normalized not in _NO_SPLIT_LABELS:
-                out_lines.append(label)
+                if pending_header_idx is not None and _canonical_section(out_lines[pending_header_idx]) is None:
+                    out_lines[pending_header_idx] = f"{out_lines[pending_header_idx]} {label}"
+                else:
+                    out_lines.append(label)
+                    pending_header_idx = len(out_lines) - 1
                 out_lines.append(rest)
                 continue
+        pending_header_idx = None
+        out_lines.append(line)
+    return "\n".join(out_lines)
+
+
+# An inline sub-heading that names a known section but shares its row with
+# that section's own first line of content (e.g. "TECHNICAL SKILLS: Auto
+# CAD, Revit"), rather than sitting in a narrow sidebar column -- so it never
+# has the wide alignment gap _GLUED_HEADER_RE looks for. Only split out when
+# the label itself is a recognized alias, so an ordinary "Note: ..." or
+# "Location: London" line is never mistaken for a section boundary.
+_COLON_HEADER_RE = re.compile(r"^\s*([A-Za-z][A-Za-z &/]{1,28}):\s+(\S.*)$")
+
+
+def _split_inline_colon_headers(text: str) -> str:
+    out_lines: List[str] = []
+    for line in text.splitlines():
+        match = _COLON_HEADER_RE.match(line)
+        if match and _canonical_section(match.group(1)) is not None:
+            out_lines.append(match.group(1))
+            out_lines.append(match.group(2))
+            continue
         out_lines.append(line)
     return "\n".join(out_lines)
 

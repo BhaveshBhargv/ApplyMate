@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import streamlit as st
 
+from utils import ai_assistant, resume_ai_parser
 from utils.date_picker import is_start_after_end, month_year_input
-from utils.resume_parser import parse_resume
+from utils.resume_parser import extract_text, parse_resume
 from utils.session_manager import (
     add_education,
     add_experience,
@@ -95,12 +96,8 @@ def render_education() -> None:
                 institution = st.text_input("Institution *", value=entry.institution, key=f"edu_i_{entry.id}")
                 degree = st.text_input("Degree *", value=entry.degree, key=f"edu_d_{entry.id}")
                 field = st.text_input("Field of study", value=entry.field_of_study, key=f"edu_fs_{entry.id}")
-                try:
-                    gpa_default = float(entry.gpa) if entry.gpa else 0.0
-                except ValueError:
-                    gpa_default = 0.0
-                gpa = st.number_input("GPA (0 = n/a)", min_value=0.0, max_value=100.0, step=0.01,
-                                      format="%.2f", value=gpa_default, key=f"edu_g_{entry.id}")
+                gpa = st.text_input("GPA (optional)", value=entry.gpa, key=f"edu_g_{entry.id}",
+                                    placeholder="e.g. 3.8, 8.5/10, 58.88%")
                 current = st.checkbox("Currently studying", value=entry.is_current, key=f"edu_c_{entry.id}")
                 st.caption("Start")
                 start = month_year_input(entry.start_date, key_prefix=f"edu_s_{entry.id}")
@@ -120,7 +117,7 @@ def render_education() -> None:
                         st.error(e)
                 else:
                     entry.institution, entry.degree, entry.field_of_study = institution.strip(), degree.strip(), field.strip()
-                    entry.gpa = f"{gpa:.2f}" if gpa > 0 else ""
+                    entry.gpa = gpa.strip()
                     entry.is_current, entry.start_date = current, start
                     entry.end_date = "Present" if current else end
                     entry.achievements = [ln.strip() for ln in ach.split("\n") if ln.strip()]
@@ -250,21 +247,52 @@ def render_import() -> None:
     has_data = any(resume.completion_status().values()) or bool(resume.extra_sections)
     st.caption("Upload a .pdf, .docx, or .txt resume to pre-fill every section. "
                "Best-effort parsing — review each section afterward.")
+    if not ai_assistant.is_configured():
+        st.caption("Add an OpenRouter API key (see ATS Match for setup) to parse with AI -- it "
+                   "reads any résumé layout, not just the common ones the basic parser expects.")
     uploaded = st.file_uploader("Choose a file", type=["pdf", "docx", "txt"], key="import_file")
     if uploaded is not None:
         if has_data:
             st.warning("This replaces everything currently entered.")
         if st.button("Parse & fill", type="primary", key="import_parse", width="stretch"):
-            try:
-                parsed = parse_resume(uploaded.getvalue(), uploaded.name)
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Couldn't read that file: {exc}")
-            else:
-                set_resume_data(parsed)
-                st.success("Parsed. Check each tab and the live preview.")
-                st.rerun()
+            _run_import(uploaded)
     if resume.extra_sections:
         st.markdown("**Kept from your upload** (didn't match a standard section):")
         for extra in resume.extra_sections:
             with st.expander(f"{extra.heading}"):
                 st.text(extra.content)
+
+
+def _run_import(uploaded) -> None:
+    """Parse the uploaded file with AI when available (it generalizes across
+    résumé layouts), falling back to the rule-based parser otherwise or if the
+    AI call fails for any reason -- import always succeeds with *something*."""
+    file_bytes = uploaded.getvalue()
+    parsed = None
+    ai_error = None
+
+    if ai_assistant.is_configured():
+        try:
+            raw_text = extract_text(file_bytes, uploaded.name)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Couldn't read that file: {exc}")
+            return
+        try:
+            with st.spinner("Reading your résumé with AI..."):
+                parsed = resume_ai_parser.parse_resume_with_ai(raw_text)
+        except ai_assistant.AIError as exc:
+            ai_error = str(exc)
+
+    if parsed is None:
+        try:
+            parsed = parse_resume(file_bytes, uploaded.name)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Couldn't read that file: {exc}")
+            return
+        if ai_error:
+            st.info(f"AI parsing wasn't available ({ai_error}), so a simpler rule-based "
+                     "parser was used instead -- review the result carefully.")
+
+    set_resume_data(parsed)
+    st.success("Parsed. Check each tab and the live preview.")
+    st.rerun()

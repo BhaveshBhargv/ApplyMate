@@ -91,6 +91,71 @@ _COVER_LETTER_SYSTEM = (
 )
 
 
+# A résumé-format-agnostic extractor: rather than hand-rolling regex/heuristics
+# for every layout a résumé might use (multi-column sidebars, unusual section
+# names, bullets that don't survive text extraction as literal characters),
+# this asks the model to read the raw extracted text and return the app's own
+# data shape directly, which generalizes across formats with no résumé-specific
+# code. Same never-invent contract as every other prompt in this file.
+_RESUME_EXTRACTION_SYSTEM = (
+    "You extract structured data from résumé text. Transcribe ONLY what is "
+    "explicitly present in the given text -- you never invent, infer, guess, or "
+    "embellish a name, date, employer, degree, skill, or any other value. If a "
+    "field is not stated, leave it as an empty string, empty list, or false -- "
+    "never fill in a plausible-sounding guess.\n\n"
+    "The text was mechanically extracted from a PDF or Word file, so expect "
+    "layout artifacts: two words merged with no space between them (e.g. "
+    "\"civilworks\"), odd line wraps, or a stray character. Use judgement to file "
+    "content under the right field despite these, but do not silently rewrite "
+    "or improve the wording -- transcribe it as written, correcting only an "
+    "obviously-merged word by inserting the missing space.\n\n"
+    "Dates: output as \"Mon YYYY\" (e.g. \"Aug 2019\") ONLY when both a month and "
+    "a year are stated or unambiguous (e.g. \"08/2019\" -> \"Aug 2019\"). If only "
+    "a bare year is given with no month, leave start_date and end_date empty -- "
+    "do not guess a month. For an ongoing role or degree, set end_date to the "
+    "literal string \"Present\" and is_current to true.\n\n"
+    "Respond with ONLY one JSON object -- no markdown code fence, no commentary, "
+    "no text before or after it -- matching exactly this shape (every key "
+    "present; arrays empty when there is nothing to put in them):\n"
+    "{\n"
+    '  "personal_info": {"full_name": "", "email": "", "phone": "", "location": "", '
+    '"linkedin_url": "", "portfolio_url": "", "professional_summary": ""},\n'
+    '  "education": [{"institution": "", "degree": "", "field_of_study": "", '
+    '"start_date": "", "end_date": "", "is_current": false, "gpa": "", "achievements": []}],\n'
+    '  "experience": [{"company": "", "job_title": "", "location": "", '
+    '"start_date": "", "end_date": "", "is_current": false, "bullet_points": []}],\n'
+    '  "projects": [{"name": "", "description": "", "technologies": [], "url": "", '
+    '"bullet_points": []}],\n'
+    '  "skills": [{"category_name": "", "skills": []}],\n'
+    '  "extra_sections": [{"heading": "", "content": ""}]\n'
+    "}\n\n"
+    "extra_sections is for real résumé content that doesn't fit any typed section "
+    "above (e.g. Certifications, Awards, Publications, Languages) -- use the "
+    "résumé's own heading for it, and never put content there that belongs in a "
+    "typed section above. professional_summary is only for an explicit summary/"
+    "objective/profile statement in the résumé -- leave it empty if there isn't one, "
+    "never write one yourself."
+)
+
+_MAX_RESUME_TEXT_CHARS = 20000  # generous for even a multi-page résumé
+
+
+def extract_resume_json(raw_text: str) -> str:
+    """Ask the model to turn extracted résumé text into the app's JSON shape.
+
+    Returns the model's raw text response (expected to be one JSON object) --
+    the caller (utils.resume_ai_parser) parses and validates it. Raises
+    AIError exactly like every other call here (no key configured, every
+    model in the chain failed, etc.) so callers can fall back to the
+    rule-based parser in utils.resume_parser.
+    """
+    text = raw_text.strip()
+    if not text:
+        raise AIError("No text to parse.")
+    prompt = f"RÉSUMÉ TEXT (mechanically extracted, may contain artifacts):\n\n{text[:_MAX_RESUME_TEXT_CHARS]}"
+    return _generate(prompt, temperature=0.1, system=_RESUME_EXTRACTION_SYSTEM)
+
+
 class AIError(Exception):
     """Raised for any AI-generation problem (no key, bad model, API error)."""
 

@@ -121,7 +121,7 @@ input::placeholder, textarea::placeholder {{ color: var(--subtle); }}
   background: var(--import); border: 1px solid var(--chip-border); border-radius: 8px 8px 0 0;
   padding: 0 16px; margin-bottom: -1px; }}
 .st-key-dash_tabs [data-baseweb="tab-list"] button:nth-last-child(2) p {{
-  font-size: 0.98rem; font-weight: 700; color: var(--accent-ink); }}
+  font-size: 0.98rem; font-weight: 700; color: var(--bg); }}
 .st-key-dash_tabs [data-baseweb="tab-list"] button:nth-last-child(2)[aria-selected="true"] {{
   background: var(--accent); border-color: var(--accent); }}
 .st-key-dash_tabs [data-baseweb="tab-list"] button:nth-last-child(2)[aria-selected="true"] p {{ color: #fff; }}

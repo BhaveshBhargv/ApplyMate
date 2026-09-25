@@ -26,6 +26,7 @@ from reportlab.platypus import (
 )
 
 from models.resume_data import ResumeData
+from utils import social_links
 
 _ACCENT = "#2B5A9E"
 _INK = "#1a2740"
@@ -87,11 +88,42 @@ def build_pdf(resume: ResumeData) -> bytes:
         if rows:
             story.append(ListFlowable(rows, bulletType="bullet", start="•", leftIndent=10, spaceAfter=2))
 
+    def contact_link(href: str, label: str) -> str:
+        # `href` must already be a fully-qualified URL/mailto -- this only
+        # escapes it for XML attribute use, it doesn't add a scheme (a bare
+        # "mailto:x@y.com" run through a "prepend https://" normalizer would
+        # wrongly become "https://mailto:x@y.com").
+        safe_href = escape(href, {'"': "&quot;"})
+        return f'<a href="{safe_href}" color="{_ACCENT}">{escape(label)}</a>'
+
+    def icon_contact_link(href: str, icon_path: str, handle: str) -> str:
+        safe_href = escape(href, {'"': "&quot;"})
+        img = f'<img src="{icon_path}" width="9" height="9" valign="-1"/>'
+        return f'<a href="{safe_href}" color="{_ACCENT}">{img}/{escape(handle)}</a>'
+
     pi = resume.personal_info
     story.append(Paragraph(escape(pi.full_name or "Your Name"), s["name"]))
-    contact = " | ".join(b for b in [pi.email, pi.phone, pi.location, pi.linkedin_url, pi.portfolio_url] if b)
-    if contact:
-        story.append(Paragraph(escape(contact), s["contact"]))
+    contact_parts = []
+    if pi.email:
+        contact_parts.append(contact_link(f"mailto:{pi.email}", pi.email))
+    if pi.phone:
+        contact_parts.append(escape(pi.phone))
+    if pi.location:
+        contact_parts.append(escape(pi.location))
+    if pi.linkedin_url:
+        contact_parts.append(icon_contact_link(social_links.display_href(pi.linkedin_url),
+                                               social_links.LINKEDIN_ICON_PATH,
+                                               social_links.linkedin_handle(pi.linkedin_url)))
+    if pi.portfolio_url:
+        if social_links.is_github_url(pi.portfolio_url):
+            contact_parts.append(icon_contact_link(social_links.display_href(pi.portfolio_url),
+                                                   social_links.GITHUB_ICON_PATH,
+                                                   social_links.github_handle(pi.portfolio_url)))
+        else:
+            contact_parts.append(contact_link(social_links.display_href(pi.portfolio_url),
+                                              social_links.portfolio_domain_label(pi.portfolio_url)))
+    if contact_parts:
+        story.append(Paragraph(" | ".join(contact_parts), s["contact"]))
 
     if pi.professional_summary:
         heading("Profile")

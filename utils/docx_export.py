@@ -13,16 +13,56 @@ from io import BytesIO
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
+from docx.opc.constants import RELATIONSHIP_TYPE
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 from models.resume_data import ResumeData
+from utils import social_links
 
 _ACCENT = RGBColor(0x2B, 0x5A, 0x9E)
+_ACCENT_HEX = "2B5A9E"
 _INK = RGBColor(0x1A, 0x27, 0x40)
 _MUTED = RGBColor(0x55, 0x60, 0x7A)
 _RIGHT_TAB = Inches(7.1)  # usable width with 0.7" side margins on Letter
+
+
+def _add_hyperlink(paragraph, href: str, text: str, *, size_pt: float, color_hex: str) -> None:
+    """Append a real clickable hyperlink run to `paragraph`.
+
+    python-docx has no built-in hyperlink support -- paragraph.add_run() only
+    ever produces plain text -- so this builds the OOXML <w:hyperlink>
+    element by hand; it's the standard recipe for this in python-docx.
+    `href` must already be a fully-qualified URL/mailto.
+    """
+    part = paragraph.part
+    r_id = part.relate_to(href, RELATIONSHIP_TYPE.HYPERLINK, is_external=True)
+
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), r_id)
+
+    run = OxmlElement("w:r")
+    run_pr = OxmlElement("w:rPr")
+
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), color_hex)
+    run_pr.append(color)
+
+    underline = OxmlElement("w:u")
+    underline.set(qn("w:val"), "single")
+    run_pr.append(underline)
+
+    size = OxmlElement("w:sz")
+    size.set(qn("w:val"), str(int(size_pt * 2)))  # w:sz is in half-points
+    run_pr.append(size)
+
+    run.append(run_pr)
+    text_el = OxmlElement("w:t")
+    text_el.text = text
+    run.append(text_el)
+    hyperlink.append(run)
+    paragraph._p.append(hyperlink)
 
 
 def _date_range(start: str, end: str, is_current: bool) -> str:
@@ -89,13 +129,51 @@ def build_docx(resume: ResumeData) -> bytes:
     name_run.font.size = Pt(21)
     name_run.font.color.rgb = _INK
 
-    contact = " | ".join(b for b in [pi.email, pi.phone, pi.location, pi.linkedin_url, pi.portfolio_url] if b)
-    if contact:
+    # (text, href, icon_path) -- href is None for plain (non-linked) items;
+    # icon_path is None when there's no badge for that item (phone, location,
+    # a non-GitHub portfolio site).
+    contact_items = []
+    if pi.email:
+        contact_items.append((pi.email, f"mailto:{pi.email}", None))
+    if pi.phone:
+        contact_items.append((pi.phone, None, None))
+    if pi.location:
+        contact_items.append((pi.location, None, None))
+    if pi.linkedin_url:
+        contact_items.append((social_links.linkedin_handle(pi.linkedin_url),
+                              social_links.display_href(pi.linkedin_url),
+                              social_links.LINKEDIN_ICON_PATH))
+    if pi.portfolio_url:
+        if social_links.is_github_url(pi.portfolio_url):
+            contact_items.append((social_links.github_handle(pi.portfolio_url),
+                                  social_links.display_href(pi.portfolio_url),
+                                  social_links.GITHUB_ICON_PATH))
+        else:
+            contact_items.append((social_links.portfolio_domain_label(pi.portfolio_url),
+                                  social_links.display_href(pi.portfolio_url), None))
+
+    if contact_items:
         c = doc.add_paragraph()
         c.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = c.add_run(contact)
-        run.font.size = Pt(9)
-        run.font.color.rgb = _MUTED
+        for i, (text, href, icon_path) in enumerate(contact_items):
+            if i > 0:
+                sep = c.add_run("  |  ")
+                sep.font.size = Pt(9)
+                sep.font.color.rgb = _MUTED
+            if icon_path:
+                # The icon sits right before its handle but isn't itself part
+                # of the hyperlink run (python-docx has no easy way to put a
+                # picture inside a <w:hyperlink>) -- the adjoining "/handle"
+                # text carries the actual click target.
+                icon_run = c.add_run()
+                icon_run.add_picture(icon_path, height=Pt(9))
+                _add_hyperlink(c, href, f"/{text}", size_pt=9, color_hex=_ACCENT_HEX)
+            elif href:
+                _add_hyperlink(c, href, text, size_pt=9, color_hex=_ACCENT_HEX)
+            else:
+                run = c.add_run(text)
+                run.font.size = Pt(9)
+                run.font.color.rgb = _MUTED
 
     # --- Summary --------------------------------------------------------------
     if pi.professional_summary:

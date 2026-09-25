@@ -14,6 +14,7 @@ from html import escape
 from typing import List
 
 from models.resume_data import ResumeData
+from utils import social_links
 
 _ACCENT = "#2B5A9E"
 _INK = "#1a2740"
@@ -27,8 +28,15 @@ def _date(start: str, end: str, is_current: bool) -> str:
 
 
 def _link(url: str, label: str) -> str:
-    href = url if url.startswith(("http://", "https://")) else f"https://{url}"
+    href = url if url.startswith(("http://", "https://", "mailto:")) else f"https://{url}"
     return f'<a href="{escape(href, quote=True)}" target="_blank">{escape(label)}</a>'
+
+
+def _icon_link(url: str, icon_data_uri: str, handle: str) -> str:
+    href = url if url.startswith(("http://", "https://", "mailto:")) else f"https://{url}"
+    img = f'<img class="rb-social-icon" src="{icon_data_uri}" alt="">'
+    return (f'<a class="rb-social-link" href="{escape(href, quote=True)}" target="_blank">'
+            f'{img}/{escape(handle)}</a>')
 
 
 def _entry(title_html: str, right: str, sub: str, bullets: List[str], tail: str = "") -> str:
@@ -73,9 +81,14 @@ def render_resume_html(resume: ResumeData) -> str:
     if pi.location:
         contact.append(escape(pi.location))
     if pi.linkedin_url:
-        contact.append(_link(pi.linkedin_url, "LinkedIn"))
+        contact.append(_icon_link(pi.linkedin_url, social_links.linkedin_icon_data_uri(),
+                                  social_links.linkedin_handle(pi.linkedin_url)))
     if pi.portfolio_url:
-        contact.append(_link(pi.portfolio_url, "GitHub" if "github" in pi.portfolio_url.lower() else "Portfolio"))
+        if social_links.is_github_url(pi.portfolio_url):
+            contact.append(_icon_link(pi.portfolio_url, social_links.github_icon_data_uri(),
+                                      social_links.github_handle(pi.portfolio_url)))
+        else:
+            contact.append(_link(pi.portfolio_url, social_links.portfolio_domain_label(pi.portfolio_url)))
     if contact:
         body.append('<div class="rb-contact">' + ' <span class="rb-sep">|</span> '.join(contact) + "</div>")
 
@@ -169,6 +182,8 @@ def render_resume_html(resume: ResumeData) -> str:
 .rb-doc .rb-contact {{ text-align: center; font-size: 11px; color: #48505f; margin-bottom: 6px; }}
 .rb-doc .rb-contact a {{ color: {_ACCENT}; text-decoration: none; }}
 .rb-doc .rb-sep {{ color: #c3c9d4; }}
+.rb-doc .rb-social-link {{ display: inline-flex; align-items: center; gap: 3px; vertical-align: middle; }}
+.rb-doc .rb-social-icon {{ width: 12px; height: 12px; border-radius: 3px; display: inline-block; }}
 .rb-doc .rb-h2 {{
   font-size: 12.5px; font-weight: 700; text-transform: uppercase;
   letter-spacing: 1.1px; color: {_ACCENT};
