@@ -207,6 +207,9 @@ if result is not None:
             '.rb-chip-miss{font-size:.72rem;font-weight:500;color:var(--gap);background:#FFF1F2;'
             'border:1px solid #FECDD3;border-radius:6px;padding:2px 8px;}'
             '.rb-chip-more{font-family:var(--mono);font-size:.68rem;color:var(--muted);}'
+            '.rb-note{margin-top:10px;padding:8px 12px;border-radius:8px;border:1px solid #FCD34D;'
+            'border-left:4px solid #F59E0B;background:#FFFBEB;color:#78350F;font-size:.82rem;line-height:1.4;}'
+            '.rb-note b{font-weight:700;color:#92400E;}'
             '</style>',
             unsafe_allow_html=True,
         )
@@ -289,8 +292,12 @@ if result is not None:
                     unsafe_allow_html=True,
                 )
                 if job.source == "We Work Remotely":
-                    st.caption("We Work Remotely may ask you to sign up first, and its paid plan adds "
-                               "unlimited applications. Many listings link on to the employer's own site.")
+                    st.markdown(
+                        '<div class="rb-note"><b>Heads up:</b> We Work Remotely may ask you to sign up '
+                        'first, and its paid plan adds unlimited applications. Many listings link on to '
+                        "the employer's own site.</div>",
+                        unsafe_allow_html=True,
+                    )
 
                 a, b, c, _sp = st.columns([1.3, 1.3, 1.4, 1.0])
                 link = _safe_link(job.url)
