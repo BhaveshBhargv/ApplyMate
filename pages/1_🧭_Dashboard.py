@@ -7,7 +7,7 @@ docx_export / pdf_export.
 """
 import streamlit as st
 
-from utils import forms
+from utils import forms, resume_precompute
 from utils.resume_html import render_resume_html
 from utils.session_manager import get_resume_data, init_session_state
 from utils.theme import inject_theme, render_download_footer, render_header, render_hero
@@ -53,6 +53,11 @@ with edit_col:
 with preview_col:
     st.markdown('<p class="rb-eyebrow">Preview</p>', unsafe_allow_html=True)
     st.markdown(render_resume_html(resume), unsafe_allow_html=True)
+
+# --- After every save: prepare what depends only on the résumé -----------------
+# Forms mutate the résumé before this point in the run, so this sees every
+# Save, remove and import. A no-op unless the résumé actually changed.
+resume_precompute.on_resume_saved(get_resume_data())
 
 # --- Footer: download ---------------------------------------------------------
 render_download_footer(resume)

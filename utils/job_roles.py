@@ -1,23 +1,23 @@
-"""Suggests job roles to search for, based on the résumé's own content.
+"""Turns a résumé into job-role suggestions: the AI facts and a keyword fallback.
 
-Recency decides priority, not section: whatever the résumé shows as most
-recent -- a current job, a degree finishing this year, anything with dates --
-weighs most. Items are put on one timeline (latest first) and both paths read
-it in that order: the AI path (utils.ai_assistant, via the OpenRouter client)
-gets the facts in that order, and the keyword fallback (no API key, or the AI
-call failed) walks it top to bottom.
+This module is pure -- no network, no Streamlit. utils.resume_precompute runs
+it (and the AI call) when the résumé is saved; the Jobs page only reads the
+stored result.
 
-Only experience and education carry dates. Projects, skills and extra sections
-are undated, so they rank after every dated item, in the order the résumé
-lists them.
+Roles are ranked by FIT, not by emphasis. Demonstrated experience (work,
+projects, education, skills) is weighed alongside stated goals (the profile /
+objective text), and a role scores by how many *kinds* of evidence back it --
+not by how many bullets or entries the résumé happens to spend on it. Recency
+only orders the evidence and breaks ties: items sit on one timeline, latest
+first. Only experience and education carry dates; projects, skills and extra
+sections are undated and rank after every dated item, in the order listed.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from models.resume_data import ResumeData
-from utils import ai_assistant
 from utils.date_picker import month_year_to_ordinal
 
 _CURRENT = 10**9      # a current/ongoing entry counts as the latest possible
@@ -139,54 +139,72 @@ _SKILL_ROLE_HINTS: List[Tuple[Tuple[str, ...], str]] = [
 ]
 
 
-def _hint_from_field(text: str) -> Optional[str]:
+def _field_roles(text: str) -> List[str]:
     lowered = text.lower()
-    for keyword, role in _FIELD_ROLE_HINTS:
-        if keyword in lowered:
-            return role
-    return None
+    return [role for keyword, role in _FIELD_ROLE_HINTS if keyword in lowered]
 
 
-def _hint_from_tokens(tokens: List[str]) -> Optional[str]:
+def _skill_roles(tokens: List[str]) -> List[str]:
     lowered = " ".join(tokens).lower()
-    for keywords, role in _SKILL_ROLE_HINTS:
-        if any(keyword in lowered for keyword in keywords):
-            return role
-    return None
+    return [role for keywords, role in _SKILL_ROLE_HINTS if any(k in lowered for k in keywords)]
 
 
-def _role_for(signal: _Signal, resume: ResumeData) -> Optional[str]:
+def _roles_for(signal: _Signal, resume: ResumeData) -> List[str]:
+    """Every role one résumé item points to (a job title is used as written)."""
     if signal.kind == "experience":
-        return signal.entry.job_title.strip() or None
+        title = signal.entry.job_title.strip()
+        return [title] if title else []
     if signal.kind == "education":
-        return _hint_from_field(f"{signal.entry.degree} {signal.entry.field_of_study}")
+        return _field_roles(f"{signal.entry.degree} {signal.entry.field_of_study}")
     if signal.kind == "project":
-        return _hint_from_tokens(list(signal.entry.technologies))
+        return _skill_roles(list(signal.entry.technologies))
     if signal.kind == "skills":
-        return _hint_from_tokens(resume.all_skills_flat())
-    return None  # extra sections are free text; no reliable role to read off
+        return _skill_roles(resume.all_skills_flat())
+    return []  # extra sections are free text; no reliable role to read off
 
 
-def _fallback_roles(resume: ResumeData, max_roles: int) -> List[str]:
-    """Heuristic role suggestions when there's no AI key (or the AI call
-    failed): walk the timeline most-recent-first, take whatever role each item
-    points to, dedupe case-insensitively, stop at `max_roles`. A job title is
-    used as written; a degree or a tech list only yields a role on a real
-    keyword match -- an unmatched one is skipped rather than forced."""
-    roles: List[str] = []
-    seen = set()
-    for signal in _timeline(resume):
-        role = _role_for(signal, resume)
-        key = role.strip().lower() if role else ""
-        if key and key not in seen:
-            roles.append(role.strip())
-            seen.add(key)
-            if len(roles) == max_roles:
-                break
-    return roles
+def fallback_roles(resume: ResumeData, max_roles: int = 3) -> List[str]:
+    """Heuristic role suggestions, used instantly and whenever the AI is
+    unavailable or hasn't finished. Ranked by fit:
+
+    - each résumé item (and the stated goal in the summary) votes for the
+      roles it points to, tagged with what kind of item it is;
+    - a role's score is the number of DIFFERENT kinds backing it -- work,
+      education, project, skills, stated goal -- so a role shown in five
+      bullets scores no higher than one shown once;
+    - ties go to whichever role is backed by the most recent item.
+
+    A job title is used as written; a degree or tech list only votes on a real
+    keyword match, so an unmatched one adds nothing rather than a guess."""
+    timeline = _timeline(resume)
+    evidence: Dict[str, dict] = {}
+
+    def note(role: str, kind: str, pos: int) -> None:
+        key = role.strip().lower()
+        if not key:
+            return
+        item = evidence.setdefault(key, {"role": role.strip(), "kinds": set(), "pos": pos})
+        item["kinds"].add(kind)
+        item["pos"] = min(item["pos"], pos)
+
+    for pos, signal in enumerate(timeline):
+        for role in _roles_for(signal, resume):
+            note(role, signal.kind, pos)
+
+    goals = resume.personal_info.professional_summary.strip()
+    if goals:
+        lowered = goals.lower()
+        for role in _field_roles(goals) + _skill_roles([goals]):
+            note(role, "goal", len(timeline))
+        for item in evidence.values():
+            if item["role"].lower() in lowered:
+                item["kinds"].add("goal")
+
+    ranked = sorted(evidence.values(), key=lambda item: (-len(item["kinds"]), item["pos"]))
+    return [item["role"] for item in ranked[:max_roles]]
 
 
-# --- AI path -----------------------------------------------------------------
+# --- AI facts ----------------------------------------------------------------
 
 def _dates(entry: Any) -> str:
     end = "Present" if entry.is_current else entry.end_date
@@ -221,34 +239,19 @@ def _signal_lines(signal: _Signal, resume: ResumeData) -> List[str]:
     return [f"{e.heading}: {e.content[:300]}"]
 
 
-def _timeline_facts(resume: ResumeData) -> str:
-    """The résumé as numbered facts, most recent first, for the AI prompt."""
+def timeline_facts(resume: ResumeData) -> str:
+    """The résumé as text for the AI prompt: the stated goals (summary /
+    objective) first and labelled, then the demonstrated items numbered most
+    recent first."""
     blocks: List[str] = []
-    for n, signal in enumerate(_timeline(resume), 1):
+    goals = resume.personal_info.professional_summary.strip()
+    if goals:
+        blocks.append(f"STATED GOALS (the candidate's own summary/objective): {goals}")
+    n = 0
+    for signal in _timeline(resume):
         lines = _signal_lines(signal, resume)
         if lines and lines[0].split(":", 1)[-1].strip():
+            n += 1
             lines[0] = f"{n}. {lines[0]}"
             blocks.append("\n".join(lines))
-    summary = resume.personal_info.professional_summary.strip()
-    if summary:
-        blocks.append(f"Summary: {summary}")
     return "\n".join(blocks)
-
-
-def suggest_roles(resume: ResumeData, max_roles: int = 3) -> List[str]:
-    """Return up to `max_roles` job titles to search for.
-
-    Empty if there's nothing in the résumé to base a suggestion on --
-    callers should check has_enough_to_suggest() first to decide whether to
-    show the suggestion row at all vs. a "add your résumé" prompt.
-    """
-    if not has_enough_to_suggest(resume):
-        return []
-    if ai_assistant.is_configured():
-        try:
-            roles = ai_assistant.suggest_job_roles(_timeline_facts(resume), max_roles=max_roles)
-            if roles:
-                return roles
-        except ai_assistant.AIError:
-            pass
-    return _fallback_roles(resume, max_roles)
