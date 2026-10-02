@@ -278,7 +278,7 @@ def _run_import(uploaded) -> None:
             st.error(f"Couldn't read that file: {exc}")
             return
         try:
-            with st.spinner("Reading your résumé with AI..."):
+            with st.spinner("Reading your résumé using LLM..."):
                 parsed = resume_ai_parser.parse_resume_with_ai(raw_text)
         except ai_assistant.AIError as exc:
             ai_error = str(exc)

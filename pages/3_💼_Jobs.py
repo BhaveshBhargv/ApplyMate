@@ -288,6 +288,9 @@ if result is not None:
                     f'{skills_html}',
                     unsafe_allow_html=True,
                 )
+                if job.source == "We Work Remotely":
+                    st.caption("We Work Remotely may ask you to sign up first, and its paid plan adds "
+                               "unlimited applications. Many listings link on to the employer's own site.")
 
                 a, b, c, _sp = st.columns([1.3, 1.3, 1.4, 1.0])
                 link = _safe_link(job.url)
