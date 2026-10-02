@@ -98,16 +98,6 @@ def is_configured() -> bool:
     return bool(_api_key())
 
 
-def snapshot_config() -> Optional[Dict[str, str]]:
-    """Resolve key, model and base URL *now* for a call made later from a
-    worker thread (reading st.secrets off-thread is unreliable). Pass the
-    values to embed(api_key=, model=, base_url=). None when no key is set."""
-    key = _api_key()
-    if not key:
-        return None
-    return {"api_key": key, "model": _model_name(), "base_url": _base_url()}
-
-
 def render_unavailable_notice() -> None:
     """Shown in place of embedding-backed controls when no key is configured."""
     st.info(
@@ -130,8 +120,7 @@ def _cache_key(model: str, text: str) -> str:
     return f"{model}:{hashlib.sha1(text.encode('utf-8')).hexdigest()}"
 
 
-def embed(texts: Sequence[str], *, api_key: Optional[str] = None,
-          model: Optional[str] = None, base_url: Optional[str] = None) -> List[List[float]]:
+def embed(texts: Sequence[str], *, api_key: Optional[str] = None) -> List[List[float]]:
     """Embed a list of texts, returning one vector per input (order preserved).
 
     Results are cached per (model, text); only cache misses hit the API, and
@@ -141,13 +130,12 @@ def embed(texts: Sequence[str], *, api_key: Optional[str] = None,
     `api_key` can be passed explicitly so this is safe to call from a worker
     thread -- resolve the key on the main thread and hand it in, since reading
     st.secrets off-thread is unreliable. When omitted, the key is resolved here.
-    `model` / `base_url` work the same way (see snapshot_config()).
     """
     items = [t if isinstance(t, str) else "" for t in texts]
     if not items:
         return []
 
-    model = model or _model_name()
+    model = _model_name()
     results: List[Optional[List[float]]] = [None] * len(items)
 
     # Figure out which texts we still need to fetch (non-blank + not cached).
@@ -172,7 +160,7 @@ def embed(texts: Sequence[str], *, api_key: Optional[str] = None,
         key = api_key or _api_key()
         if not key:
             raise EmbeddingError("No embeddings API key configured.")
-        fetched = _fetch_embeddings(to_fetch, key=key, model=model, base_url=base_url or _base_url())
+        fetched = _fetch_embeddings(to_fetch, key=key, model=model)
         with _CACHE_LOCK:
             for text, vector in zip(to_fetch, fetched):
                 _CACHE[_cache_key(model, text)] = vector
@@ -188,11 +176,11 @@ def embed_one(text: str, *, api_key: Optional[str] = None) -> List[float]:
     return embed([text], api_key=api_key)[0]
 
 
-def _fetch_embeddings(texts: List[str], *, key: str, model: str, base_url: str) -> List[List[float]]:
+def _fetch_embeddings(texts: List[str], *, key: str, model: str) -> List[List[float]]:
     """Call the embeddings API for a list of (non-blank) texts, in batches."""
     from openai import OpenAI
 
-    client = OpenAI(api_key=key, base_url=base_url)
+    client = OpenAI(api_key=key, base_url=_base_url())
     vectors: List[List[float]] = []
     for start in range(0, len(texts), _BATCH_SIZE):
         batch = texts[start : start + _BATCH_SIZE]

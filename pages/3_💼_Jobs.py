@@ -14,7 +14,7 @@ from html import escape
 
 import streamlit as st
 
-from utils import ats_analyzer, job_roles, job_search, resume_precompute
+from utils import ats_analyzer, job_roles, job_search
 from utils.job_search import (
     WORK_TYPES,
     infer_country,
@@ -96,11 +96,40 @@ def _reset_job_page() -> None:
     st.session_state["job_page"] = 0
 
 
-# --- Role suggestions ------------------------------------------------------------
-# Prepared when the résumé is saved (utils.resume_precompute); this page only
-# reads them -- opening it never waits on an AI call.
+def _resume_role_fingerprint(r) -> str:
+    """A cheap content fingerprint so role suggestions are only recomputed
+    when the résumé actually changes, not on every Streamlit rerun (typing
+    in the search box, paginating, switching the sort order, etc. all rerun
+    this whole script). Covers everything suggest_roles draws on, dates
+    included -- ranking is by recency, so editing a date reorders the
+    suggestions."""
+    parts = []
+    for e in r.experience:
+        parts += [e.job_title, e.start_date, e.end_date, str(e.is_current)]
+    for e in r.education:
+        parts += [f"{e.degree} {e.field_of_study}", e.start_date, e.end_date, str(e.is_current)]
+    parts += [p.name for p in r.projects]
+    parts += [t for p in r.projects for t in p.technologies]
+    parts += [s for cat in r.skills for s in cat.skills]
+    parts += [f"{x.heading} {x.content}" for x in r.extra_sections]
+    parts.append(r.personal_info.professional_summary)
+    return "|".join(p.strip().lower() for p in parts if p)
+
+
+def _get_role_suggestions(r) -> list:
+    fingerprint = _resume_role_fingerprint(r)
+    cached = st.session_state.get("job_role_suggestions")
+    if cached and cached[0] == fingerprint:
+        return cached[1]
+    with st.spinner("Finding role suggestions for your résumé..."):
+        roles = job_roles.suggest_roles(r)
+    st.session_state["job_role_suggestions"] = (fingerprint, roles)
+    return roles
+
+
+# --- Role suggestions, grounded in the résumé -----------------------------------
 if job_roles.has_enough_to_suggest(resume):
-    suggested_roles = resume_precompute.suggested_roles(resume)
+    suggested_roles = _get_role_suggestions(resume)
     if suggested_roles:
         st.markdown('<p class="rb-eyebrow">Suggested roles for you</p>', unsafe_allow_html=True)
         role_cols = st.columns(len(suggested_roles))
@@ -109,8 +138,6 @@ if job_roles.has_enough_to_suggest(resume):
                 with st.spinner("Searching openings..."):
                     run_search(role, default_location, "Any")
                 st.rerun()
-        if resume_precompute.is_refining():
-            st.caption("Refining these with AI — they update on your next click.")
     else:
         st.caption("Couldn't guess a role from your résumé yet -- add an experience title, or a "
                    "recognizable skill/field of study, on the Dashboard. (Adding an OpenRouter API "

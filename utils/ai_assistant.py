@@ -211,17 +211,6 @@ def is_configured() -> bool:
     return bool(_api_key())
 
 
-def snapshot_config() -> Optional[dict]:
-    """Resolve key, base URL and model chain *now*, for a call made later from
-    a worker thread. Reading st.secrets off the main thread is unreliable, so a
-    thread is handed this plain dict (via `_generate(config=...)`) instead of
-    resolving secrets itself. None when no key is configured."""
-    key = _api_key()
-    if not key:
-        return None
-    return {"key": key, "base_url": _base_url(), "chain": _model_chain()}
-
-
 def render_unavailable_notice() -> None:
     """Shown in place of AI controls when no API key is configured."""
     st.info(
@@ -273,23 +262,19 @@ def _is_transient(reason: str) -> bool:
     return any(hint in lowered for hint in _TRANSIENT_HINTS)
 
 
-def _generate(prompt: str, temperature: float = 0.4, *, system: Optional[str] = None,
-              config: Optional[dict] = None) -> str:
+def _generate(prompt: str, temperature: float = 0.4, *, system: Optional[str] = None) -> str:
     """Send one prompt to the model (OpenRouter) and return the trimmed text.
 
     `system` overrides the résumé-editor system prompt for tasks that aren't
     résumé editing (the cover letter writes prose, not ATS bullet lines). The
     never-invent rules are restated in every system prompt used here.
 
-    `config` is a snapshot_config() dict, passed when this runs off the main
-    thread; without it, key/URL/models are resolved here as usual.
-
     Free endpoints fail intermittently, so each model in `_model_chain()` gets
     `_MAX_ATTEMPTS` tries with exponential backoff before moving on. Only a
     genuinely transient failure is retried -- a bad key, a bad model slug, or a
     rejected prompt is reported immediately, with the provider's own wording.
     """
-    key = config["key"] if config else _api_key()
+    key = _api_key()
     if not key:
         raise AIError("No OpenRouter API key configured.")
 
@@ -298,13 +283,13 @@ def _generate(prompt: str, temperature: float = 0.4, *, system: Optional[str] = 
 
     client = OpenAI(
         api_key=key,
-        base_url=config["base_url"] if config else _base_url(),
+        base_url=_base_url(),
         default_headers={"X-Title": "AI Resume Builder"},  # optional OpenRouter attribution
         timeout=120.0,
         max_retries=0,  # retries are handled below, so backoff and fallback stay in one place
     )
 
-    chain = config["chain"] if config else _model_chain()
+    chain = _model_chain()
     last_reason = "no attempt was made"
     last_transient = False
     for model in chain:
@@ -650,11 +635,10 @@ def suggest_improvements(resume: ResumeData, jd: str = "") -> str:
     return _generate(prompt, temperature=0.4)
 
 
-def suggest_job_roles(facts: str, max_roles: int = 3, config: Optional[dict] = None) -> List[str]:
+def suggest_job_roles(facts: str, max_roles: int = 3) -> List[str]:
     """Suggest job titles to search for from résumé `facts` already ordered
     most recent first (see utils.job_roles) -- a natural next step or clear
-    lateral fit, never a specialization the résumé has no evidence for.
-    `config` is a snapshot_config() dict when called from a worker thread."""
+    lateral fit, never a specialization the résumé has no evidence for."""
     if not facts.strip():
         raise AIError("Nothing in the résumé yet to base a suggestion on.")
     prompt = (
@@ -686,5 +670,5 @@ def suggest_job_roles(facts: str, max_roles: int = 3, config: Optional[dict] = N
         "bullets, no explanation, no duplicates.\n\n"
         f"CANDIDATE FACTS (most recent first):\n{facts}"
     )
-    text = _generate(prompt, temperature=0.4, config=config)
+    text = _generate(prompt, temperature=0.4)
     return _parse_bullets(text)[:max_roles]

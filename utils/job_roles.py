@@ -1,8 +1,8 @@
-"""Turns a résumé into job-role suggestions: the AI facts and a keyword fallback.
+"""Suggests job roles to search for, based on the résumé's own content.
 
-This module is pure -- no network, no Streamlit. utils.resume_precompute runs
-it (and the AI call) when the résumé is saved; the Jobs page only reads the
-stored result.
+AI-based when an OpenRouter key is configured (utils.ai_assistant, given the
+résumé as facts built here); otherwise, or if that call fails, a keyword
+fallback ranks the roles instead.
 
 Roles are ranked by FIT, not by emphasis. Demonstrated experience (work,
 projects, education, skills) is weighed alongside stated goals (the profile /
@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from models.resume_data import ResumeData
+from utils import ai_assistant
 from utils.date_picker import month_year_to_ordinal
 
 _CURRENT = 10**9      # a current/ongoing entry counts as the latest possible
@@ -255,3 +256,22 @@ def timeline_facts(resume: ResumeData) -> str:
             lines[0] = f"{n}. {lines[0]}"
             blocks.append("\n".join(lines))
     return "\n".join(blocks)
+
+
+def suggest_roles(resume: ResumeData, max_roles: int = 3) -> List[str]:
+    """Return up to `max_roles` job titles to search for.
+
+    Empty if there's nothing in the résumé to base a suggestion on --
+    callers should check has_enough_to_suggest() first to decide whether to
+    show the suggestion row at all vs. an "add your résumé" prompt.
+    """
+    if not has_enough_to_suggest(resume):
+        return []
+    if ai_assistant.is_configured():
+        try:
+            roles = ai_assistant.suggest_job_roles(timeline_facts(resume), max_roles=max_roles)
+            if roles:
+                return roles
+        except ai_assistant.AIError:
+            pass
+    return fallback_roles(resume, max_roles)
