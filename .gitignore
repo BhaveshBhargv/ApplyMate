@@ -7,3 +7,4 @@ venv/
 output/*
 !output/.gitkeep
 .claude/
+checklist.html

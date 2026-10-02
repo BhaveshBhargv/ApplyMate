@@ -14,7 +14,7 @@ from html import escape
 
 import streamlit as st
 
-from utils import ats_analyzer, job_search
+from utils import ats_analyzer, job_roles, job_search
 from utils.job_search import (
     WORK_TYPES,
     infer_country,
@@ -92,6 +92,59 @@ def _freshness_label(days) -> str:
     return "1y+ ago"
 
 
+def _reset_job_page() -> None:
+    st.session_state["job_page"] = 0
+
+
+def _resume_role_fingerprint(r) -> str:
+    """A cheap content fingerprint so role suggestions are only recomputed
+    when the résumé actually changes, not on every Streamlit rerun (typing
+    in the search box, paginating, switching the sort order, etc. all rerun
+    this whole script). Covers everything suggest_roles draws on, dates
+    included -- ranking is by recency, so editing a date reorders the
+    suggestions."""
+    parts = []
+    for e in r.experience:
+        parts += [e.job_title, e.start_date, e.end_date, str(e.is_current)]
+    for e in r.education:
+        parts += [f"{e.degree} {e.field_of_study}", e.start_date, e.end_date, str(e.is_current)]
+    parts += [p.name for p in r.projects]
+    parts += [t for p in r.projects for t in p.technologies]
+    parts += [s for cat in r.skills for s in cat.skills]
+    parts += [f"{x.heading} {x.content}" for x in r.extra_sections]
+    parts.append(r.personal_info.professional_summary)
+    return "|".join(p.strip().lower() for p in parts if p)
+
+
+def _get_role_suggestions(r) -> list:
+    fingerprint = _resume_role_fingerprint(r)
+    cached = st.session_state.get("job_role_suggestions")
+    if cached and cached[0] == fingerprint:
+        return cached[1]
+    with st.spinner("Finding role suggestions for your résumé..."):
+        roles = job_roles.suggest_roles(r)
+    st.session_state["job_role_suggestions"] = (fingerprint, roles)
+    return roles
+
+
+# --- Role suggestions, grounded in the résumé -----------------------------------
+if job_roles.has_enough_to_suggest(resume):
+    suggested_roles = _get_role_suggestions(resume)
+    if suggested_roles:
+        st.markdown('<p class="rb-eyebrow">Suggested roles for you</p>', unsafe_allow_html=True)
+        role_cols = st.columns(len(suggested_roles))
+        for i, (col, role) in enumerate(zip(role_cols, suggested_roles)):
+            if col.button(role, key=f"role_sugg_{i}", width="stretch"):
+                with st.spinner("Searching openings..."):
+                    run_search(role, default_location, "Any")
+                st.rerun()
+    else:
+        st.caption("Couldn't guess a role from your résumé yet -- add an experience title, or a "
+                   "recognizable skill/field of study, on the Dashboard. (Adding an OpenRouter API "
+                   "key also gets you broader, AI-powered suggestions.)")
+else:
+    st.caption("Add your experience or skills on the Dashboard to get job role suggestions.")
+
 # Auto-search handoff from the Dashboard's "Search jobs for this résumé" button.
 if st.session_state.pop("auto_job_search", False) and default_title.strip():
     with st.spinner("Searching openings for your résumé..."):
@@ -162,18 +215,34 @@ if result is not None:
         page = min(max(st.session_state.get("job_page", 0), 0), total_pages - 1)
         st.session_state["job_page"] = page
         start = page * PAGE_SIZE
-        page_jobs = result.jobs[start:start + PAGE_SIZE]
+        end = min(start + PAGE_SIZE, total)
 
-        st.markdown(f'<p class="rb-eyebrow" style="margin-top:.6rem">'
-                    f'{total} openings &middot; showing {start + 1}–{start + len(page_jobs)}</p>',
-                    unsafe_allow_html=True)
-        if resume_text.strip():
-            st.caption("Sorted by **most skills covered**, then **freshest**. Green chips are the job's "
-                       "skills you already have; red are ones it names that you don't. For the full "
-                       "semantic breakdown use **Match in ATS**.")
+        count_col, sort_col = st.columns([3, 1.3])
+        with count_col:
+            st.markdown(f'<p class="rb-eyebrow" style="margin-top:.6rem">'
+                        f'{total} openings &middot; showing {start + 1}–{end}</p>',
+                        unsafe_allow_html=True)
+        with sort_col:
+            sort_choice = st.selectbox("Sort by", ["Relevance", "Newest first"], key="job_sort",
+                                       on_change=_reset_job_page, label_visibility="collapsed")
+
+        # result.jobs is already in relevance order (run_search); re-sorting
+        # here is just a display-time reorder of the already-fetched list --
+        # no re-search needed, so switching the toggle is instant.
+        jobs = result.jobs
+        if sort_choice == "Newest first":
+            jobs = sorted(jobs, key=lambda j: j.freshness_days if j.freshness_days is not None else 10**6)
+        page_jobs = jobs[start:start + PAGE_SIZE]
+
+        if sort_choice == "Newest first":
+            st.caption("Sorted by **newest posting** first.")
+        elif resume_text.strip():
+            st.caption("Sorted by **relevance** — most skills covered first, then freshest. Green chips "
+                       "are the job's skills you already have; red are ones it names that you don't. For "
+                       "the full semantic breakdown use **Match in ATS**.")
         else:
-            st.caption("Sorted by **freshest** first. Fill in your résumé on the Dashboard to see which "
-                       "of each job's skills you match and which are missing.")
+            st.caption("Sorted by **relevance** — freshest first for now. Fill in your résumé on the "
+                       "Dashboard to also sort by skills match.")
 
         for offset, job in enumerate(page_jobs):
             i = start + offset

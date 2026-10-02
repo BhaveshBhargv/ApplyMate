@@ -633,3 +633,27 @@ def suggest_improvements(resume: ResumeData, jd: str = "") -> str:
         f"RESUME:\n{facts}" + _jd_clause(jd)
     )
     return _generate(prompt, temperature=0.4)
+
+
+def suggest_job_roles(facts: str, max_roles: int = 3) -> List[str]:
+    """Suggest job titles to search for from résumé `facts` already ordered
+    most recent first (see utils.job_roles) -- a natural next step or clear
+    lateral fit, never a specialization the résumé has no evidence for."""
+    if not facts.strip():
+        raise AIError("Nothing in the résumé yet to base a suggestion on.")
+    prompt = (
+        f"Based ONLY on the candidate facts below, suggest {max_roles} job titles this "
+        "person should search for on a job board. The facts are numbered MOST RECENT "
+        "FIRST (items with no dates come after the dated ones, in the order the résumé "
+        "lists them). Weight the most recent items most heavily -- whatever the person "
+        "did or studied latest, whether that is a job, a degree, or a project -- and do "
+        "not favor work experience over education or projects just because it is work "
+        "experience. Older items only matter where they support the same direction. "
+        "Prefer titles that closely match their actual background -- a natural next step "
+        "or a clear lateral fit, not a different field they have no evidence for. Return "
+        "ONLY the job titles, one per line, no numbering, no bullets, no explanation, no "
+        "duplicates.\n\n"
+        f"CANDIDATE FACTS (most recent first):\n{facts}"
+    )
+    text = _generate(prompt, temperature=0.4)
+    return _parse_bullets(text)[:max_roles]
