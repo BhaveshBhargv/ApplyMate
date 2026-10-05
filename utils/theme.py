@@ -119,14 +119,23 @@ input::placeholder, textarea::placeholder {{ color: var(--subtle); }}
 [data-baseweb="tab-highlight"] {{ background-color: var(--accent) !important; }}
 
 
-.st-key-dash_tabs [data-baseweb="tab-list"] button:nth-last-child(2) {{
-  background: var(--import); border: 1px solid var(--chip-border); border-radius: 8px 8px 0 0;
-  padding: 0 16px; margin-bottom: -1px; }}
-.st-key-dash_tabs [data-baseweb="tab-list"] button:nth-last-child(2) p {{
-  font-size: 0.98rem; font-weight: 700; color: var(--bg); }}
-.st-key-dash_tabs [data-baseweb="tab-list"] button:nth-last-child(2)[aria-selected="true"] {{
+/* Section switcher (utils.theme.section_picker): a horizontal radio drawn as tabs. */
+[class*="st-key-picker_"] [role="radiogroup"] {{ gap: 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }}
+[class*="st-key-picker_"] [data-testid="stRadio"] label {{
+  margin: 0 !important; padding: 6px 7px; border-radius: 8px 8px 0 0; cursor: pointer;
+  border-bottom: 2px solid transparent; margin-bottom: -1px !important; }}
+[class*="st-key-picker_"] [data-testid="stRadio"] label > div:first-child {{ display: none; }}
+[class*="st-key-picker_"] [data-testid="stRadio"] label p {{ color: var(--muted); font-weight: 500; font-size: .86rem; }}
+[class*="st-key-picker_"] [data-testid="stRadio"] label:hover p {{ color: var(--text); }}
+[class*="st-key-picker_"] [data-testid="stRadio"] label:has(input:checked) {{ border-bottom-color: var(--accent); }}
+[class*="st-key-picker_"] [data-testid="stRadio"] label:has(input:checked) p {{ color: var(--text); }}
+.st-key-picker_dash_section [data-testid="stRadio"] label:last-child {{
+  background: var(--import); border: 1px solid var(--chip-border); margin-bottom: -1px !important; }}
+.st-key-picker_dash_section [data-testid="stRadio"] label:last-child p {{
+  font-size: 0.88rem; font-weight: 700; color: var(--bg); }}
+.st-key-picker_dash_section [data-testid="stRadio"] label:last-child:has(input:checked) {{
   background: var(--accent); border-color: var(--accent); }}
-.st-key-dash_tabs [data-baseweb="tab-list"] button:nth-last-child(2)[aria-selected="true"] p {{ color: #fff; }}
+.st-key-picker_dash_section [data-testid="stRadio"] label:last-child:has(input:checked) p {{ color: #fff; }}
 
 /* Metrics + captions */
 [data-testid="stMetricValue"] {{ color: var(--text); font-family: var(--mono); font-weight: 600; }}
@@ -168,6 +177,25 @@ hr {{ border-color: var(--line); background: var(--line); }}
 def inject_theme() -> None:
     """Inject the app stylesheet. Call once at the top of every page."""
     st.markdown(_CSS, unsafe_allow_html=True)
+
+
+def section_picker(options, key: str) -> str:
+    """A tab-like switcher whose selection lives in session state.
+
+    st.tabs snaps back to the first tab whenever the content of a tab gains or
+    loses an element (adding an entry, an import, an error message...), because
+    the browser re-creates the tab bar. This keeps the choice in st.session_state
+    instead, and callers render only the chosen section. It's a horizontal radio
+    styled as tabs (see "Section switcher" in the CSS), so it can't be deselected.
+    """
+    last = f"{key}__last"
+    options = list(options)
+    start = st.session_state.get(last, options[0])
+    with st.container(key=f"picker_{key}"):
+        value = st.radio("Section", options, index=options.index(start) if start in options else 0,
+                         key=key, horizontal=True, label_visibility="collapsed")
+    st.session_state[last] = value
+    return value
 
 
 def render_header(active: str) -> None:

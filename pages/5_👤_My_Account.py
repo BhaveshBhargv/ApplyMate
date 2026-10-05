@@ -18,7 +18,7 @@ from utils.session_manager import (
     set_cover_letter_target,
     set_job_description,
 )
-from utils.theme import inject_theme, render_header, render_hero
+from utils.theme import inject_theme, render_header, render_hero, section_picker
 
 inject_theme()
 render_header("account")
@@ -83,12 +83,10 @@ if tour_col.button("Take the tour again", key="acct_tour", width="stretch"):
     walkthrough.start()
     st.switch_page("pages/1_🧭_Dashboard.py")
 
-tab_resumes, tab_letters, tab_jobs, tab_privacy = st.tabs(
-    ["Résumés", "Cover letters", "Saved jobs", "Privacy & data"]
-)
+section = section_picker(["Résumés", "Cover letters", "Saved jobs", "Privacy & data"], "acct_section")
 
 # --- Résumés -------------------------------------------------------------------
-with tab_resumes:
+if section == "Résumés":
     resumes = _load(db.list_resumes)
     active_id = account.active_resume_id()
     st.caption(f"{len(resumes)} of 5 résumés stored.")
@@ -130,7 +128,7 @@ with tab_resumes:
                         st.rerun()
 
 # --- Cover letters -------------------------------------------------------------
-with tab_letters:
+elif section == "Cover letters":
     letters = _load(db.list_cover_letters)
     st.caption(f"{len(letters)} of 10 cover letters stored. Save new ones from the **Cover Letter** page.")
     if not letters:
@@ -139,8 +137,7 @@ with tab_letters:
         with st.expander(f"{letter.title}  ·  {_when(letter.updated_at)}"):
             text = st.text_area("Letter", value=letter.text, height=320, key=f"cl_text_{letter.id}")
             b1, b2, b3, _sp = st.columns([1.2, 1.2, 1.2, 1.4])
-            if b1.button("Save changes", key=f"cl_save_{letter.id}", width="stretch",
-                         disabled=text == letter.text):
+            if b1.button("Save changes", key=f"cl_save_{letter.id}", width="stretch"):
                 if _attempt(lambda: db.save_cover_letter(
                         letter.id, title=letter.title, company=letter.company, role=letter.role,
                         text=text, resume_id=letter.resume_id), "Cover letter updated."):
@@ -162,7 +159,7 @@ with tab_letters:
                         st.rerun()
 
 # --- Saved jobs ----------------------------------------------------------------
-with tab_jobs:
+elif section == "Saved jobs":
     jobs = _load(db.list_saved_jobs)
     st.caption(f"{len(jobs)} of 50 saved jobs. Save jobs from the **Jobs** page.")
     if not jobs:
@@ -187,8 +184,9 @@ with tab_jobs:
             a, b, c, d, _sp = st.columns([1.1, 1.1, 1.2, 1.0, 0.6])
             if link.startswith(("http://", "https://")):
                 a.link_button("View & apply", link, width="stretch")
-            if b.button("Save changes", key=f"job_save_{saved.id}", width="stretch",
-                        disabled=(status == saved.status and notes.strip() == saved.notes)):
+            # Not disabled when nothing changed: a text box only commits on blur, so a
+            # button greyed out until then would swallow the first click.
+            if b.button("Save changes", key=f"job_save_{saved.id}", width="stretch"):
                 if _attempt(lambda: db.update_saved_job(saved, status=status, notes=notes), "Job updated."):
                     st.rerun()
             if c.button("Cover letter", key=f"job_cl_{saved.id}", width="stretch"):
@@ -207,7 +205,7 @@ with tab_jobs:
                         st.rerun()
 
 # --- Privacy & data ------------------------------------------------------------
-with tab_privacy:
+else:
     st.markdown("#### What's stored")
     st.markdown(
         "- Your **email** (for login).\n"

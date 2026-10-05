@@ -7,14 +7,21 @@ docx_export / pdf_export.
 """
 import streamlit as st
 
-from utils import forms
+from utils import forms, job_roles
 from utils.resume_html import render_resume_html
 from utils.session_manager import get_resume_data, init_session_state
-from utils.theme import inject_theme, render_download_footer, render_header, render_hero
+from utils.theme import (
+    inject_theme,
+    render_download_footer,
+    render_header,
+    render_hero,
+    section_picker,
+)
 
 inject_theme()
 render_header("dashboard")
 init_session_state()
+forms.process_pending_import()   # a queued import must land before anything reads the résumé
 resume = get_resume_data()
 
 render_hero("Build résumé", "Build your résumé",
@@ -24,7 +31,7 @@ edit_col, preview_col = st.columns([1, 1.05], gap="small")
 
 # --- Left: editor -------------------------------------------------------------
 with edit_col:
-    role = resume.experience[0].job_title if resume.experience else ""
+    role = job_roles.latest_title(resume)
     if st.button("Search jobs for this résumé", key="dash_find_jobs",
                  help="Opens the Jobs page and searches openings for your most recent role."):
         st.session_state["auto_job_search"] = True
@@ -33,21 +40,16 @@ with edit_col:
         st.caption("Add a role under **Experience** to search by job title.")
 
     with st.container(key="dash_tabs"):
-        tab_personal, tab_edu, tab_exp, tab_proj, tab_skills, tab_import = st.tabs(
-            ["Personal", "Education", "Experience", "Projects", "Skills", "Import"]
-        )
-        with tab_personal:
-            forms.render_personal()
-        with tab_edu:
-            forms.render_education()
-        with tab_exp:
-            forms.render_experience()
-        with tab_proj:
-            forms.render_projects()
-        with tab_skills:
-            forms.render_skills()
-        with tab_import:
-            forms.render_import()
+        section = section_picker(
+            ["Personal", "Education", "Experience", "Projects", "Skills", "Import"], "dash_section")
+        {
+            "Personal": forms.render_personal,
+            "Education": forms.render_education,
+            "Experience": forms.render_experience,
+            "Projects": forms.render_projects,
+            "Skills": forms.render_skills,
+            "Import": forms.render_import,
+        }[section]()
 
 # --- Right: live preview ------------------------------------------------------
 with preview_col:

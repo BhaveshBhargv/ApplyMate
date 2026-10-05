@@ -40,7 +40,7 @@ render_hero("Find roles", "Find your next role",
             "Search live openings and jump straight to the official posting — we never apply for you, just links.")
 
 # Prefill from the résumé: most recent role title + personal location.
-default_title = resume.experience[0].job_title if resume.experience else ""
+default_title = job_roles.latest_title(resume)
 default_location = resume.personal_info.location or ""
 
 

@@ -25,6 +25,25 @@ _CURRENT = 10**9      # a current/ongoing entry counts as the latest possible
 _LAST = 10**6         # position for undated, non-list items (skills, extras)
 
 
+def plausible_title(title: str) -> str:
+    """The title if it reads like a job title, else "". An imported résumé can
+    leave a whole bullet sentence in the title field; searching for (or suggesting)
+    that would find nothing, so anything long or sentence-like is ignored."""
+    title = (title or "").strip()
+    if not title or len(title.split()) > 7 or len(title) > 70 or title.endswith((".", ";", ":")):
+        return ""
+    return title
+
+
+def latest_title(resume: ResumeData) -> str:
+    """The most recent plausible job title on the résumé, or ""."""
+    for exp in resume.experience:
+        title = plausible_title(exp.job_title)
+        if title:
+            return title
+    return ""
+
+
 def has_enough_to_suggest(resume: ResumeData) -> bool:
     """True if there's anything -- experience, education, projects, skills,
     or a summary -- to base a role suggestion on."""
@@ -153,7 +172,7 @@ def _skill_roles(tokens: List[str]) -> List[str]:
 def _roles_for(signal: _Signal, resume: ResumeData) -> List[str]:
     """Every role one résumé item points to (a job title is used as written)."""
     if signal.kind == "experience":
-        title = signal.entry.job_title.strip()
+        title = plausible_title(signal.entry.job_title)
         return [title] if title else []
     if signal.kind == "education":
         return _field_roles(f"{signal.entry.degree} {signal.entry.field_of_study}")

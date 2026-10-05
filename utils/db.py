@@ -319,6 +319,7 @@ def update_saved_job(saved: SavedJob, *, status: str, notes: str) -> None:
 def delete_saved_job(job_id: str) -> None:
     _call("DELETE", "saved_jobs", params={"id": f"eq.{job_id}", "user_id": f"eq.{_uid()}"},
           prefer="return=minimal")
+    st.session_state.pop("_saved_job_hashes", None)   # the Jobs page marks cards from this cache
     applog.log("job_removed", "data")
 
 
@@ -367,6 +368,7 @@ def delete_all_data() -> None:
     uid = _uid()
     for table in ("cover_letters", "saved_jobs", "resumes"):
         _call("DELETE", table, params={"user_id": f"eq.{uid}"}, prefer="return=minimal")
+    st.session_state.pop("_saved_job_hashes", None)
     applog.log("user_data_deleted", "privacy")
 
 

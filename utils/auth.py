@@ -18,6 +18,7 @@ import streamlit.components.v1 as components
 
 from utils import applog
 from utils import supabase_client as sb
+from utils.theme import section_picker
 from utils.validators import is_valid_email
 
 _AUTH_KEY = "auth"
@@ -237,8 +238,8 @@ def render_login_page() -> None:
         if notice:
             st.success(notice)
 
-        tab_in, tab_up = st.tabs(["Log in", "Create account"])
-        with tab_in:
+        mode = section_picker(["Log in", "Create account"], "login_mode")
+        if mode == "Log in":
             with st.form("login_form"):
                 email = st.text_input("Email", key="login_email", autocomplete="email")
                 password = st.text_input("Password", type="password", key="login_password",
@@ -253,7 +254,7 @@ def render_login_page() -> None:
                         st.rerun()
                     st.error(message)
 
-        with tab_up:
+        else:
             with st.form("signup_form"):
                 email2 = st.text_input("Email", key="signup_email", autocomplete="email")
                 pw1 = st.text_input(f"Password (at least {_MIN_PASSWORD} characters)", type="password",

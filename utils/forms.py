@@ -15,6 +15,7 @@ from utils import ai_assistant, resume_ai_parser
 from utils.date_picker import is_start_after_end, month_year_input
 from utils.resume_parser import extract_text, parse_resume
 from utils.session_manager import (
+    refresh_field,
     add_education,
     add_experience,
     add_project,
@@ -254,8 +255,14 @@ def render_import() -> None:
     if uploaded is not None:
         if has_data:
             st.warning("This replaces everything currently entered.")
-        if st.button("Parse & fill", type="primary", key="import_parse", width="stretch"):
-            _run_import(uploaded)
+        # The button only queues the import; process_pending_import() runs it at the
+        # top of the page, before the tabs draw, so every tab already shows the new
+        # data and no st.rerun() is needed (a rerun would drop you back on the first tab).
+        st.button("Parse & fill", type="primary", key="import_parse", width="stretch",
+                  on_click=_queue_import, args=(uploaded,))
+    flash = st.session_state.get(_IMPORT_FLASH)
+    if flash:
+        getattr(st, flash[0])(flash[1])
     if resume.extra_sections:
         st.markdown("**Kept from your upload** (didn't match a standard section):")
         for extra in resume.extra_sections:
@@ -263,19 +270,36 @@ def render_import() -> None:
                 st.text(extra.content)
 
 
-def _run_import(uploaded) -> None:
-    """Parse the uploaded file with AI when available (it generalizes across
-    résumé layouts), falling back to the rule-based parser otherwise or if the
-    AI call fails for any reason -- import always succeeds with *something*."""
-    file_bytes = uploaded.getvalue()
+_IMPORT_PENDING = "_import_pending"
+_IMPORT_FLASH = "_import_flash"
+
+
+def _queue_import(uploaded) -> None:
+    """Button callback: remember which file to import on the coming run."""
+    st.session_state[_IMPORT_PENDING] = (uploaded.name, uploaded.getvalue())
+    st.session_state.pop(_IMPORT_FLASH, None)
+
+
+def process_pending_import() -> None:
+    """Run a queued import. Call this on the Dashboard BEFORE the section tabs.
+
+    Parses with AI when available (it generalizes across résumé layouts), falling
+    back to the rule-based parser otherwise or if the AI call fails for any
+    reason -- import always succeeds with *something*. The outcome is left in
+    session state and shown on the Import tab.
+    """
+    pending = st.session_state.pop(_IMPORT_PENDING, None)
+    if not pending:
+        return
+    name, file_bytes = pending
     parsed = None
     ai_error = None
 
     if ai_assistant.is_configured():
         try:
-            raw_text = extract_text(file_bytes, uploaded.name)
+            raw_text = extract_text(file_bytes, name)
         except Exception as exc:  # noqa: BLE001
-            st.error(f"Couldn't read that file: {exc}")
+            st.session_state[_IMPORT_FLASH] = ("error", f"Couldn't read that file: {exc}")
             return
         try:
             with st.spinner("Reading your résumé using LLM..."):
@@ -285,14 +309,17 @@ def _run_import(uploaded) -> None:
 
     if parsed is None:
         try:
-            parsed = parse_resume(file_bytes, uploaded.name)
+            with st.spinner("Reading your résumé..."):
+                parsed = parse_resume(file_bytes, name)
         except Exception as exc:  # noqa: BLE001
-            st.error(f"Couldn't read that file: {exc}")
+            st.session_state[_IMPORT_FLASH] = ("error", f"Couldn't read that file: {exc}")
             return
-        if ai_error:
-            st.info(f"AI parsing wasn't available ({ai_error}), so a simpler rule-based "
-                     "parser was used instead -- review the result carefully.")
 
     set_resume_data(parsed)
-    st.success("Parsed. Check each tab and the live preview.")
-    st.rerun()
+    refresh_field("personal_summary")   # the summary box is keyed; make it show the new text
+    note = ""
+    if ai_error:
+        note = (f" AI parsing wasn't available ({ai_error}), so a simpler rule-based parser was "
+                "used -- review the result carefully.")
+    st.session_state[_IMPORT_FLASH] = (
+        "success", "Parsed. Check each tab and the live preview." + note)

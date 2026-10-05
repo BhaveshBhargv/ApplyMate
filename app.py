@@ -27,6 +27,11 @@ pages = [
     st.Page("pages/5_👤_My_Account.py", title="My Account", icon="👤", url_path="account"),
 ]
 
+# Registered on EVERY run, before the login gate. Without this, Streamlit falls back to
+# auto-discovering pages/ and shows them in a sidebar -- on the login screen that would let a
+# signed-out visitor open any page directly and skip the gate.
+navigation = st.navigation(pages, position="hidden")
+
 # --- Gate: configuration, then login -------------------------------------------
 if not sb.is_configured() or not db.master_key_configured():
     inject_theme()
@@ -57,7 +62,7 @@ if problem:
 try:
     walkthrough.maybe_show()
     auth.flush_cookie()
-    st.navigation(pages, position="hidden").run()
+    navigation.run()
 except Exception as exc:  # noqa: BLE001 -- log the failure type, then let Streamlit show it
     applog.log("unhandled_exception", "error", "error", type=type(exc).__name__)
     raise
