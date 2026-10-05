@@ -50,6 +50,7 @@ _CSS = f"""
 [data-testid="stMainBlockContainer"] {{ max-width: 1240px; padding: 1.3rem 2.4rem 4rem; }}
 
 /* Top bar */
+.st-key-am_cookie {{ position: absolute; height: 0; width: 0; overflow: hidden; margin: 0; }}
 .rb-header {{ display: flex; align-items: baseline; gap: 0.5rem; }}
 .rb-word {{ font-family: var(--display) !important; font-weight: 800; font-size: 1.55rem !important;
   color: var(--text); letter-spacing: -0.04em; line-height: 1; }}
@@ -63,12 +64,13 @@ _CSS = f"""
   transition: background .2s var(--ease), color .2s var(--ease), border-color .2s var(--ease), transform .1s ease; }}
 [data-testid="stBaseButton-secondary"] {{ background: transparent; border: 1px solid var(--line); color: var(--text); }}
 [data-testid="stBaseButton-secondary"]:hover {{ border-color: var(--accent); color: var(--accent-ink); background: var(--surface); }}
-[data-testid="stBaseButton-primary"] {{ background: var(--btn); border: 1px solid var(--btn); color: #fff; }}
-[data-testid="stBaseButton-primary"]:hover {{ background: var(--btn-hover); border-color: var(--btn-hover); }}
+[data-testid="stBaseButton-primary"], [data-testid="stBaseButton-primaryFormSubmit"] {{ background: var(--btn); border: 1px solid var(--btn); color: #fff; }}
+[data-testid="stBaseButton-primary"]:hover, [data-testid="stBaseButton-primaryFormSubmit"]:hover {{ background: var(--btn-hover); border-color: var(--btn-hover); }}
 [data-testid="stBaseButton-primary"]:disabled {{ background: var(--btn); border-color: var(--btn); color: #fff; opacity: 1; }}
 /* Button labels live in a nested markdown container -- colour them explicitly so
    the label is visible (a dark label on a dark primary button would vanish). */
-[data-testid="stBaseButton-primary"] p, [data-testid="stBaseButton-primary"] div {{ color: #fff !important; }}
+[data-testid="stBaseButton-primary"] p, [data-testid="stBaseButton-primary"] div,
+[data-testid="stBaseButton-primaryFormSubmit"] p, [data-testid="stBaseButton-primaryFormSubmit"] div {{ color: #fff !important; }}
 [data-testid="stBaseButton-secondary"] p {{ color: var(--text); }}
 [data-testid="stBaseButton-secondary"]:hover p {{ color: var(--accent-ink); }}
 .stButton > button:active, .stDownloadButton > button:active {{ transform: translateY(1px); }}
@@ -175,7 +177,10 @@ def render_header(active: str) -> None:
         '<span class="rb-tag">Résumé + Jobs</span></div>',
         unsafe_allow_html=True,
     )
-    spacer, b1, b2, b3, b4 = st.columns([3.1, 1.4, 1.4, 1.4, 1.75])
+    from utils import auth
+
+    logged_in = auth.is_logged_in()
+    spacer, b1, b2, b3, b4, b5, b6 = st.columns([1.1, 1.3, 1.3, 1.0, 1.6, 1.5, 1.1 if logged_in else 0.01])
     with b1:
         if st.button("Dashboard", key="nav_dashboard", width="stretch",
                      type="primary" if active == "dashboard" else "secondary",
@@ -196,6 +201,16 @@ def render_header(active: str) -> None:
                      type="primary" if active == "cover" else "secondary",
                      disabled=active == "cover"):
             st.switch_page("pages/4_✉️_Cover_Letter.py")
+    with b5:
+        if st.button("My Account", key="nav_account", width="stretch",
+                     type="primary" if active == "account" else "secondary",
+                     disabled=active == "account"):
+            st.switch_page("pages/5_👤_My_Account.py")
+    if logged_in:
+        with b6:
+            if st.button("Log out", key="nav_logout", width="stretch"):
+                auth.log_out()
+                st.rerun()
     st.markdown('<div class="rb-rule"></div>', unsafe_allow_html=True)
 
 

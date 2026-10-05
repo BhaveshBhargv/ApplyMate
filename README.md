@@ -20,6 +20,31 @@ cosine/vector math is pure Python, so no numpy/scipy/scikit-learn is needed.
 The chat model is **Tencent Hunyuan 3 (`tencent/hy3:free`) via OpenRouter**,
 whose free tier lets the deployed app run at no cost.
 
+## Accounts, database & privacy
+
+ApplyMate runs behind a login (Supabase Auth, email + password). Each user's
+résumés, cover letters and saved jobs live in a Supabase Postgres database,
+**encrypted by the app before they are stored** (AES-256-GCM, one random key per
+user, wrapped by `ENCRYPTION_MASTER_KEY`). Row Level Security restricts every
+request to the signed-in user's own rows, and the app only ever uses the
+publishable key -- never the `service_role` key.
+
+One-time setup:
+
+1. Supabase -> SQL Editor -> run [`supabase/schema.sql`](supabase/schema.sql).
+2. Supabase -> Authentication -> Providers -> Email -> turn **Confirm email** off
+   (or leave it on and configure custom SMTP for production).
+3. Add `SUPABASE_URL`, `SUPABASE_KEY` and `ENCRYPTION_MASTER_KEY` to
+   `.streamlit/secrets.toml` (and to the Streamlit Cloud secrets). See
+   `.streamlit/secrets.toml.example`. **Back up the master key**: without it,
+   stored data can't be decrypted.
+
+Limits (enforced in the database, sized for the free tier): 5 résumés, 10 cover
+letters and 50 saved jobs per user, and 15 AI requests per user per day. Edit the
+numbers in `supabase/schema.sql`. The `app_logs` table records event names and
+error types only, never résumé content. Users can download or permanently delete
+all their data from **My Account**.
+
 ## Project Structure
 
 The UI is a single two-panel **Dashboard** (edit on the left, live résumé
@@ -29,7 +54,7 @@ writes a grounded letter for one of those jobs.
 
 ```
 resume-builder/
-├── app.py                  # Entry point: registers the 4 pages via st.navigation
+├── app.py                  # Entry point: login gate + the 5 pages via st.navigation
 ├── requirements.txt
 ├── models/
 │   └── resume_data.py      # Dataclasses: the single source of truth for resume content

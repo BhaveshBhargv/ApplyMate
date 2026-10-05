@@ -10,7 +10,7 @@ by the ATS analyzer, the AI rewrite features, and the document exporters.
 from __future__ import annotations
 
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from typing import List
 
 
@@ -148,3 +148,23 @@ class ResumeData:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ResumeData":
+        """Rebuild a ResumeData from `to_dict()` output (e.g. after decrypting a
+        stored résumé). Unknown keys are ignored and missing ones take their
+        defaults, so older/newer stored versions load without errors."""
+        data = data or {}
+
+        def build(klass, raw):
+            names = {f.name for f in fields(klass)}
+            return klass(**{k: v for k, v in (raw or {}).items() if k in names})
+
+        return cls(
+            personal_info=build(PersonalInfo, data.get("personal_info")),
+            education=[build(EducationEntry, e) for e in data.get("education", [])],
+            experience=[build(ExperienceEntry, e) for e in data.get("experience", [])],
+            projects=[build(ProjectEntry, e) for e in data.get("projects", [])],
+            skills=[build(SkillCategory, e) for e in data.get("skills", [])],
+            extra_sections=[build(ExtraSection, e) for e in data.get("extra_sections", [])],
+        )

@@ -1,0 +1,8 @@
+# One committed look (see utils/theme.py): force the light base so form labels and
+# text stay readable for visitors whose OS/browser is in dark mode.
+[theme]
+base = "light"
+primaryColor = "#10B981"
+backgroundColor = "#FAFAFA"
+secondaryBackgroundColor = "#F4F4F5"
+textColor = "#18181B"

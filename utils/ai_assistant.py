@@ -262,6 +262,23 @@ def _is_transient(reason: str) -> bool:
     return any(hint in lowered for hint in _TRANSIENT_HINTS)
 
 
+def _enforce_daily_limit() -> None:
+    """Count this call against the signed-in user's daily AI allowance.
+
+    The allowance protects the shared OpenRouter free quota; it is enforced by
+    the database (utils.db.consume_ai_call), so it can't be bypassed from the
+    browser. Does nothing when nobody is logged in (e.g. local development).
+    """
+    from utils import auth, db  # lazy: keeps this module importable on its own
+
+    if not auth.is_logged_in():
+        return
+    result = db.consume_ai_call()
+    if not result.get("allowed", True):
+        raise AIError(f"You've used all {result.get('limit', '')} of today's AI requests. "
+                      "The allowance resets at midnight UTC.")
+
+
 def _generate(prompt: str, temperature: float = 0.4, *, system: Optional[str] = None) -> str:
     """Send one prompt to the model (OpenRouter) and return the trimmed text.
 
@@ -277,6 +294,7 @@ def _generate(prompt: str, temperature: float = 0.4, *, system: Optional[str] = 
     key = _api_key()
     if not key:
         raise AIError("No OpenRouter API key configured.")
+    _enforce_daily_limit()
 
     # Imported lazily so a missing package never breaks unrelated pages.
     from openai import OpenAI

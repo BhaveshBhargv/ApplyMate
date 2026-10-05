@@ -14,6 +14,7 @@ from html import escape
 
 import streamlit as st
 
+from utils import account, auth, db
 from utils import ai_assistant as ai
 from utils import cover_letter as cl
 from utils import cover_letter_pdf
@@ -81,6 +82,7 @@ def _generate(company: str, role: str, jd: str) -> None:
         letter = cl.generate(resume, jd, company=company, role=role)
         st.session_state["cover_letter"] = letter
         st.session_state.pop("cover_letter_error", None)
+        st.session_state.pop("_cl_saved_id", None)   # a new letter is a new saved item
         # The letter goes into a widget the user may have already edited, so the
         # revision nonce has to be bumped for `value=` to be re-read.
         refresh_field("cl_body")
@@ -155,7 +157,7 @@ if letter is not None:
         help="Edit freely — the PDF exports exactly what's in this box.",
     )
 
-    d1, d2, _sp = st.columns([1.2, 1.2, 2.6])
+    d1, d2, d3, _sp = st.columns([1.2, 1.2, 1.5, 1.7])
     d1.download_button(
         "Download PDF",
         data=cover_letter_pdf.build_cover_letter_pdf(
@@ -165,9 +167,21 @@ if letter is not None:
         mime="application/pdf", type="primary", width="stretch",
         disabled=not edited.strip(),
     )
+    if auth.is_logged_in():
+        already_saved = st.session_state.get("_cl_saved_id")
+        if d3.button("Update saved copy" if already_saved else "Save to My Account", key="cl_save",
+                     width="stretch", disabled=not edited.strip()):
+            try:
+                st.session_state["_cl_saved_id"] = db.save_cover_letter(
+                    already_saved, title="", company=letter.company, role=letter.role, text=edited,
+                    resume_id=account.active_resume_id())
+                st.toast("Cover letter saved to My Account.")
+            except db.DataError as exc:
+                st.error(str(exc))
     if d2.button("Start over", key="cl_reset", width="stretch"):
         st.session_state.pop("cover_letter", None)
         st.session_state.pop("cover_letter_error", None)
+        st.session_state.pop("_cl_saved_id", None)
         refresh_field("cl_body")
         st.rerun()
 

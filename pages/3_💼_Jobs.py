@@ -14,7 +14,7 @@ from html import escape
 
 import streamlit as st
 
-from utils import ats_analyzer, job_roles, job_search
+from utils import ats_analyzer, auth, db, job_roles, job_search
 from utils.job_search import (
     WORK_TYPES,
     infer_country,
@@ -48,6 +48,19 @@ def _safe_link(url: str) -> str:
     """Return an http(s) URL safe to use as a link target, else empty."""
     url = (url or "").strip()
     return url if url.startswith(("http://", "https://")) else ""
+
+
+def _saved_job_hashes():
+    """Hashes of the user's saved job URLs, cached in session state until a save
+    clears the cache. Used to mark cards as saved."""
+    cached = st.session_state.get("_saved_job_hashes")
+    if cached is None:
+        try:
+            cached = db.saved_job_hashes()
+        except db.DataError:
+            cached = set()   # unreadable: show everything as unsaved rather than retry on every card
+        st.session_state["_saved_job_hashes"] = cached
+    return cached
 
 
 PAGE_SIZE = 10
@@ -299,7 +312,7 @@ if result is not None:
                         unsafe_allow_html=True,
                     )
 
-                a, b, c, _sp = st.columns([1.3, 1.3, 1.4, 1.0])
+                a, b, c, d = st.columns([1.3, 1.3, 1.4, 1.0])
                 link = _safe_link(job.url)
                 if link:
                     a.link_button("View & apply", link, width="stretch")
@@ -316,6 +329,18 @@ if result is not None:
                         set_cover_letter_target(job.company, job.title)
                         st.session_state["cover_letter_auto"] = True
                         st.switch_page("pages/4_✉️_Cover_Letter.py")
+                if auth.is_logged_in() and link:
+                    if db.job_hash(job.url) in _saved_job_hashes():
+                        d.button("Saved ✓", key=f"saved_{i}", width="stretch", disabled=True)
+                    elif d.button("Save", key=f"save_{i}", width="stretch",
+                                  help="Keep this job on your My Account page."):
+                        try:
+                            db.save_job(job)
+                            st.session_state["_saved_job_hashes"] = None   # re-read next run
+                            st.toast("Saved to My Account.")
+                            st.rerun()
+                        except db.DataError as exc:
+                            st.error(str(exc))
 
         # --- Pager ---------------------------------------------------------
         if total_pages > 1:

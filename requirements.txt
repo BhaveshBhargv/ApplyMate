@@ -27,3 +27,7 @@ reportlab>=4.2.2
 
 # Job search -- Adzuna + Remotive HTTP APIs
 requests>=2.31.0
+
+# Accounts: field-level encryption of everything stored per user (AES-256-GCM).
+# The Supabase database itself is reached over plain HTTPS with `requests`.
+cryptography>=43.0.0

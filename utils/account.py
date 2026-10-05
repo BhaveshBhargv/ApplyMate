@@ -1,0 +1,110 @@
+"""Glue between the signed-in user's saved résumés and the live Streamlit session.
+
+  bootstrap()  -- after login: unlock the user's key, load their latest résumé
+  autosave()   -- end of every run: if the résumé changed, store it (encrypted)
+  open_resume / new_resume -- switch which saved résumé is being edited
+
+Pages keep working on `st.session_state["resume_data"]` exactly as before; this
+module only mirrors it to the database. Nothing here runs for logged-out users.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Optional
+
+import streamlit as st
+
+from models.resume_data import ResumeData
+from utils import auth, db
+from utils.session_manager import get_resume_data, refresh_field, set_resume_data
+
+_ACTIVE_ID = "_active_resume_id"
+_ACTIVE_LABEL = "_active_resume_label"
+_SAVED_HASH = "_saved_resume_hash"
+_BOOTSTRAPPED = "_bootstrapped_for"
+_LAST_ERROR = "_autosave_last_error"
+
+
+def _fingerprint(resume: ResumeData) -> str:
+    return hashlib.sha256(json.dumps(resume.to_dict(), sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _has_content(resume: ResumeData) -> bool:
+    info = resume.personal_info
+    return bool(resume.searchable_text().strip()
+                or info.full_name.strip() or info.email.strip() or info.phone.strip())
+
+
+def active_resume_id() -> Optional[str]:
+    return st.session_state.get(_ACTIVE_ID)
+
+
+def active_resume_label() -> str:
+    return st.session_state.get(_ACTIVE_LABEL, "")
+
+
+def bootstrap() -> Optional[str]:
+    """Run once per login. Returns an error message to show, or None."""
+    user = auth.current_user()
+    if not user or st.session_state.get(_BOOTSTRAPPED) == user["id"]:
+        return None
+    try:
+        db.ensure_profile()
+        saved = db.list_resumes()
+    except db.DataError as exc:
+        return str(exc)
+    if saved:
+        open_resume(saved[0])
+    else:
+        st.session_state[_SAVED_HASH] = _fingerprint(get_resume_data())
+    st.session_state[_BOOTSTRAPPED] = user["id"]
+    return None
+
+
+def open_resume(saved: "db.SavedResume") -> None:
+    """Make a saved résumé the one being edited in the builder."""
+    set_resume_data(saved.resume)
+    st.session_state[_ACTIVE_ID] = saved.id
+    st.session_state[_ACTIVE_LABEL] = saved.label
+    st.session_state[_SAVED_HASH] = _fingerprint(saved.resume)
+    refresh_field("personal_summary")   # the summary box is keyed; make it re-read the new text
+
+
+def new_resume() -> None:
+    """Start a blank résumé (it's stored as a new one once it has content)."""
+    blank = ResumeData()
+    set_resume_data(blank)
+    st.session_state.pop(_ACTIVE_ID, None)
+    st.session_state.pop(_ACTIVE_LABEL, None)
+    st.session_state[_SAVED_HASH] = _fingerprint(blank)
+    refresh_field("personal_summary")
+
+
+def rename_active(label: str) -> None:
+    st.session_state[_ACTIVE_LABEL] = label.strip()[:80]
+    st.session_state.pop(_SAVED_HASH, None)   # force the next autosave to write the new label
+
+
+def autosave() -> None:
+    """Store the current résumé if it changed since the last save."""
+    if not auth.is_logged_in() or st.session_state.get(_BOOTSTRAPPED) != (auth.current_user() or {}).get("id"):
+        return
+    resume = get_resume_data()
+    fingerprint = _fingerprint(resume)
+    if fingerprint == st.session_state.get(_SAVED_HASH):
+        return
+    if _ACTIVE_ID not in st.session_state and not _has_content(resume):
+        return
+    try:
+        label = st.session_state.get(_ACTIVE_LABEL) or (
+            "My résumé" if db.count_resumes() == 0 else f"Résumé {db.count_resumes() + 1}")
+        st.session_state[_ACTIVE_ID] = db.save_resume(st.session_state.get(_ACTIVE_ID), label, resume)
+        st.session_state[_ACTIVE_LABEL] = label
+        st.session_state[_SAVED_HASH] = fingerprint
+        st.session_state.pop(_LAST_ERROR, None)
+    except db.DataError as exc:
+        # Tell the user once per distinct problem instead of on every rerun.
+        if st.session_state.get(_LAST_ERROR) != str(exc):
+            st.session_state[_LAST_ERROR] = str(exc)
+            st.toast(f"Your résumé wasn't saved: {exc}", icon="⚠️")
