@@ -1,16 +1,21 @@
-"""ATS Match: semantic résumé/JD scoring + evidence-based AI tailoring.
+"""ATS Match: résumé/JD scoring + evidence-based AI tailoring.
 
 Two halves, both grounded and honest:
 
-  * The breakdown -- an embedding-based match report: overall %, which skills
-    matched vs are missing, how well experience covers the JD's responsibilities
-    (with the supporting bullet), and whether education meets the requirement.
-    "Missing" is information, never a prompt to fabricate.
+  * The breakdown -- scored the way standard ATS checkers do (utils/ats_analyzer):
+    the share of the job's keywords found in the résumé (hard skills weigh most),
+    job-title match, how well bullets cover the job's responsibilities, and
+    whether the education requirement is met. "Missing" is information, never a
+    prompt to fabricate.
 
   * The suggestions -- an agent pipeline (retrieve -> evidence -> write) turns the
     report into apply-able cards: each one names the JD requirement that caused
     it, the exact résumé bullet it edits, and a confidence. The AI only rephrases
     bullets you already wrote; it never invents skills, tools, or metrics.
+
+Pressing "Analyze match" shows the score straight away; the AI suggestions are
+requested right after (when an OpenRouter key is set) and appear below as soon as
+they arrive -- the score never waits for them.
 """
 from html import escape
 
@@ -44,7 +49,7 @@ st.markdown(
   color:var(--text); letter-spacing:-.03em; font-feature-settings:"tnum"; }
 .rb-score-pct { font-family:var(--mono); font-size:1.1rem; color:var(--muted); }
 .rb-score-verdict { font-size:.92rem; color:var(--muted); margin:.1rem 0 .2rem; }
-.rb-tiles { display:grid; grid-template-columns:repeat(3,1fr); gap:.7rem; margin:.4rem 0 .2rem; }
+.rb-tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:.7rem; margin:.4rem 0 .2rem; }
 .rb-tile { border:1px solid var(--line); border-radius:12px; background:var(--surface); padding:.7rem .8rem; }
 .rb-tile-label { font-family:var(--mono); font-size:.6rem; font-weight:500; letter-spacing:.14em;
   text-transform:uppercase; color:var(--muted); margin:0 0 .35rem; }
@@ -88,7 +93,7 @@ st.markdown(
 )
 
 render_hero("Match & tailor", "Match your résumé to a job",
-            "Paste a job description for a semantic match breakdown — skills, experience, and "
+            "Paste a job description for a match breakdown — keywords, job title, experience, and "
             "education — then apply evidence-based AI edits to your own bullets.")
 
 if not resume.searchable_text().strip():
@@ -103,7 +108,8 @@ def _bar(pct: int) -> str:
     return f'<div class="rb-bar"><i style="width:{max(0, min(100, pct))}%"></i></div>'
 
 
-def _tile(label: str, score: "ats_analyzer.SectionScore | int", *, specified: bool = True) -> str:
+def _tile(label: str, score: "ats_analyzer.SectionScore | int", *, specified: bool = True,
+          note: str = "") -> str:
     """One sub-score tile. Shows n/a when the JD doesn't specify the section."""
     if isinstance(score, ats_analyzer.SectionScore):
         specified, value = score.specified, score.score
@@ -113,9 +119,10 @@ def _tile(label: str, score: "ats_analyzer.SectionScore | int", *, specified: bo
         return (f'<div class="rb-tile"><p class="rb-tile-label">{escape(label)}</p>'
                 f'<div class="rb-tile-num na">n/a</div>'
                 f'<p class="rb-tile-note">Not specified in this job.</p></div>')
+    note_html = f'<p class="rb-tile-note">{escape(note)}</p>' if note else ""
     return (f'<div class="rb-tile"><p class="rb-tile-label">{escape(label)}</p>'
             f'<div class="rb-tile-num">{value}<span style="font-size:.9rem;color:var(--muted)">%</span></div>'
-            f'{_bar(value)}</div>')
+            f'{_bar(value)}{note_html}</div>')
 
 
 def _render_report(report: "ats_analyzer.MatchReport") -> None:
@@ -132,15 +139,17 @@ def _render_report(report: "ats_analyzer.MatchReport") -> None:
         f'<p class="rb-score-verdict">{escape(verdict)}</p>',
         unsafe_allow_html=True,
     )
-    if not report.semantic:
-        st.caption("Keyword-based estimate. Add a free `EMBEDDINGS_API_KEY` (Gemini) for synonym-aware semantic matching.")
+    st.caption("Scored like standard ATS checkers: each keyword from the job is looked for across your whole "
+               "résumé (word stems and common variants count), hard skills weigh most, then job title, "
+               "experience and education."
+               + ("" if report.semantic else " Add a free `EMBEDDINGS_API_KEY` to also catch synonyms."))
 
-    # Sub-score tiles: a skills-coverage %, experience match, education match
-    skills_pct = (round(len(report.skills_matched) / report.skills_total * 100)
-                  if report.skills_total else 0)
+    # Sub-score tiles: keyword coverage, job title, experience match, education match
     st.markdown(
         '<div class="rb-tiles">'
-        + _tile("Skills coverage", skills_pct, specified=report.skills_total > 0)
+        + _tile("Keywords", report.keyword_pct or 0, specified=report.keyword_pct is not None,
+                note=f"{len(report.skills_matched)} of {report.skills_total} found")
+        + _tile("Job title", report.title, note=report.title.detail if report.title.specified else "")
         + _tile("Experience match", report.experience)
         + _tile("Education match", report.education)
         + "</div>",
@@ -148,24 +157,27 @@ def _render_report(report: "ats_analyzer.MatchReport") -> None:
     )
 
     # Skills matched / missing
-    st.markdown(f"###### Skills matched ({len(report.skills_matched)})")
+    st.markdown(f"###### Keywords found ({len(report.skills_matched)})")
     if report.skills_matched:
         chips = "".join(
-            f'<span class="rb-chip-ok" title="matches your: {escape(m.resume_skill)}">{escape(m.jd_skill)}</span>'
+            f'<span class="rb-chip-ok" title="{escape(m.kind)} · your résumé: '
+            f'{escape(m.resume_skill or "found in your text")}">{escape(m.jd_skill)}</span>'
             for m in report.skills_matched
         )
         st.markdown(f'<div class="rb-chips">{chips}</div>', unsafe_allow_html=True)
     else:
-        st.caption("None of the job's named skills were found in your résumé.")
+        st.caption("None of the job's keywords were found in your résumé.")
 
-    st.markdown(f"###### Skills missing ({len(report.skills_missing)})")
+    st.markdown(f"###### Keywords missing ({len(report.skills_missing)})")
     if report.skills_missing:
-        chips = "".join(f'<span class="rb-chip-miss">{escape(s)}</span>' for s in report.skills_missing)
+        chips = "".join(
+            f'<span class="rb-chip-miss" title="{escape(report.missing_kinds.get(s, "keyword"))}">{escape(s)}</span>'
+            for s in report.skills_missing)
         st.markdown(f'<div class="rb-chips">{chips}</div>', unsafe_allow_html=True)
         st.caption("In the job, not in your résumé. Add them **only if you genuinely have them** — "
                    "the app never fabricates skills.")
     else:
-        st.caption("Every named skill in the job is already covered.")
+        st.caption("Every keyword in the job is already covered.")
 
     # Experience evidence: JD responsibility -> best supporting bullet
     evidence = [m for m in report.requirement_matches if m.best_bullet][:5]
@@ -173,7 +185,7 @@ def _render_report(report: "ats_analyzer.MatchReport") -> None:
         st.markdown("###### How your experience lines up")
         rows = ""
         for m in evidence:
-            sim = ats_analyzer._calibrate(m.similarity) if report.semantic else int(round(m.similarity * 100))
+            sim = int(round(m.score * 100))
             rows += (
                 f'<div class="rb-ev"><span class="rb-ev-sim">{sim}% match</span>'
                 f'<div class="rb-ev-req">{escape(m.requirement)}</div>'
@@ -224,8 +236,9 @@ if analyze_clicked:
     # A fresh analysis invalidates any previously generated suggestions.
     st.session_state.pop("ats_suggestions", None)
     st.session_state.pop("ats_suggest_error", None)
+    st.session_state["ats_autogen"] = True   # request the AI recommendations right after the score is shown
 
-report = st.session_state.get("ats_report")
+report =st.session_state.get("ats_report")
 if report is not None:
     st.divider()
     _render_report(report)
@@ -246,14 +259,22 @@ else:
     if not jd.strip():
         st.info("Paste a job description above and analyze it first — the suggestions are tailored to it.")
     else:
-        if st.button("Generate suggestions", key="gen_suggestions", type="primary"):
-            with st.spinner("Retrieving relevant bullets and tailoring them..."):
+        # Analyzing queues the suggestions (`ats_autogen`). By this point the score and
+        # breakdown above have already been drawn, so the browser shows them while the
+        # model works here -- the score never waits for the AI.
+        auto = st.session_state.get("ats_autogen", False)   # cleared only once the attempt finishes
+        label = "Regenerate suggestions" if "ats_suggestions" in st.session_state else "Generate suggestions"
+        clicked = st.button(label, key="gen_suggestions", type="primary")
+        if auto or clicked:
+            with st.spinner("Writing résumé recommendations"
+                            + (" — your score above is ready..." if report is not None else "...")):
                 try:
                     st.session_state["ats_suggestions"] = agents.generate_suggestions(resume, jd)
                     st.session_state.pop("ats_suggest_error", None)
                 except ai.AIError as exc:
                     st.session_state["ats_suggestions"] = []
                     st.session_state["ats_suggest_error"] = str(exc)
+            st.session_state.pop("ats_autogen", None)
 
         err = st.session_state.get("ats_suggest_error")
         if err:
