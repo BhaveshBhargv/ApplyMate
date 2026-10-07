@@ -13,9 +13,8 @@ Two halves, both grounded and honest:
     it, the exact résumé bullet it edits, and a confidence. The AI only rephrases
     bullets you already wrote; it never invents skills, tools, or metrics.
 
-Pressing "Analyze match" shows the score straight away; the AI suggestions are
-requested right after (when an OpenRouter key is set) and appear below as soon as
-they arrive -- the score never waits for them.
+The two are separate actions: "Analyze match" only scores (instant, no AI call);
+the AI suggestions are requested only when "Generate suggestions" is pressed.
 """
 from html import escape
 
@@ -236,9 +235,13 @@ if analyze_clicked:
     # A fresh analysis invalidates any previously generated suggestions.
     st.session_state.pop("ats_suggestions", None)
     st.session_state.pop("ats_suggest_error", None)
-    st.session_state["ats_autogen"] = True   # request the AI recommendations right after the score is shown
 
-report =st.session_state.get("ats_report")
+report = st.session_state.get("ats_report")
+# A report stored by an older version of the app (live sessions survive a deploy) lacks the
+# newer fields; drop it rather than crash -- the user just analyzes again.
+if report is not None and not all(hasattr(report, f) for f in ("keyword_pct", "title", "missing_kinds")):
+    st.session_state.pop("ats_report", None)
+    report = None
 if report is not None:
     st.divider()
     _render_report(report)
@@ -259,22 +262,17 @@ else:
     if not jd.strip():
         st.info("Paste a job description above and analyze it first — the suggestions are tailored to it.")
     else:
-        # Analyzing queues the suggestions (`ats_autogen`). By this point the score and
-        # breakdown above have already been drawn, so the browser shows them while the
-        # model works here -- the score never waits for the AI.
-        auto = st.session_state.get("ats_autogen", False)   # cleared only once the attempt finishes
+        # A separate action from "Analyze match": nothing here runs (and no AI call is
+        # made or counted against the daily limit) until this button is pressed.
         label = "Regenerate suggestions" if "ats_suggestions" in st.session_state else "Generate suggestions"
-        clicked = st.button(label, key="gen_suggestions", type="primary")
-        if auto or clicked:
-            with st.spinner("Writing résumé recommendations"
-                            + (" — your score above is ready..." if report is not None else "...")):
+        if st.button(label, key="gen_suggestions", type="primary"):
+            with st.spinner("Retrieving relevant bullets and tailoring them..."):
                 try:
                     st.session_state["ats_suggestions"] = agents.generate_suggestions(resume, jd)
                     st.session_state.pop("ats_suggest_error", None)
                 except ai.AIError as exc:
                     st.session_state["ats_suggestions"] = []
                     st.session_state["ats_suggest_error"] = str(exc)
-            st.session_state.pop("ats_autogen", None)
 
         err = st.session_state.get("ats_suggest_error")
         if err:
