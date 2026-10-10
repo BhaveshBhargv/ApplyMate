@@ -33,6 +33,20 @@ class DataError(Exception):
     """A problem to show the user (limit reached, expired session, network...)."""
 
 
+class SchemaOutdated(DataError):
+    """The database predates a feature (e.g. primary résumés): supabase/schema.sql
+    needs re-running. Raised so callers can degrade instead of failing."""
+
+
+_PRIMARY_UNSUPPORTED = "_primary_unsupported"
+_NEEDS_SCHEMA = "Primary résumés need the latest database schema -- re-run supabase/schema.sql."
+
+
+def primary_supported() -> bool:
+    """False once we've seen the database reject the is_primary column."""
+    return not st.session_state.get(_PRIMARY_UNSUPPORTED)
+
+
 # --- Plumbing ----------------------------------------------------------------
 
 def _secret(name: str) -> Optional[str]:
@@ -81,6 +95,9 @@ def _call(method: str, table: str, **kwargs: Any) -> Any:
         if "limit_reached" in exc.message:
             name = _LIMIT_NAMES.get(exc.message.split("limit_reached:")[-1].strip(), "items")
             raise DataError(f"You've reached the limit for stored {name}. Delete one to add another.") from exc
+        if "is_primary" in exc.message or "set_primary_resume" in exc.message:
+            st.session_state[_PRIMARY_UNSUPPORTED] = True
+            raise SchemaOutdated(_NEEDS_SCHEMA) from exc
         applog.log("db_error", "error", "error", table=table, status=exc.status or 0, code=exc.code)
         if exc.status == 401:
             raise DataError("Your session has expired. Please log in again.") from exc
@@ -91,6 +108,9 @@ def _rpc(name: str, payload: Optional[dict] = None) -> Any:
     try:
         return sb.rpc(name, _token(), payload)
     except sb.SupabaseError as exc:
+        if "set_primary_resume" in exc.message or exc.status == 404:
+            st.session_state[_PRIMARY_UNSUPPORTED] = True
+            raise SchemaOutdated(_NEEDS_SCHEMA) from exc
         applog.log("rpc_error", "error", "error", fn=name, status=exc.status or 0, code=exc.code)
         raise DataError("Couldn't complete that right now. Please try again.") from exc
 
@@ -150,6 +170,7 @@ class SavedResume:
     label: str
     resume: ResumeData
     updated_at: str
+    is_primary: bool = False
 
 
 def _decrypt(kind: str, row: dict) -> Optional[dict]:
@@ -161,24 +182,45 @@ def _decrypt(kind: str, row: dict) -> Optional[dict]:
 
 
 def list_resumes() -> List[SavedResume]:
-    rows = _call("GET", "resumes", params={"select": "id,data_enc,updated_at",
-                                           "order": "updated_at.desc"}) or []
+    """The user's résumés: the primary one first, then most recently edited."""
+    columns = "id,data_enc,updated_at" + (",is_primary" if primary_supported() else "")
+    try:
+        rows = _call("GET", "resumes", params={"select": columns, "order": "updated_at.desc"}) or []
+    except SchemaOutdated:   # database not upgraded yet: carry on without the primary flag
+        rows = _call("GET", "resumes", params={"select": "id,data_enc,updated_at",
+                                               "order": "updated_at.desc"}) or []
     out: List[SavedResume] = []
     for row in rows:
         payload = _decrypt("resume", row)
         if payload is None:
             continue
         out.append(SavedResume(row["id"], payload.get("label") or "Untitled résumé",
-                               ResumeData.from_dict(payload.get("resume")), row["updated_at"]))
+                               ResumeData.from_dict(payload.get("resume")), row["updated_at"],
+                               bool(row.get("is_primary"))))
+    out.sort(key=lambda r: not r.is_primary)   # stable: primary first, recency order otherwise
     return out
+
+
+def primary_resume(resumes: Optional[List[SavedResume]] = None) -> Optional[SavedResume]:
+    """The primary résumé, or None if the user has no résumés (or none is marked)."""
+    resumes = list_resumes() if resumes is None else resumes
+    return next((r for r in resumes if r.is_primary), None)
+
+
+def set_primary_resume(resume_id: str) -> None:
+    """Make `resume_id` the user's primary résumé (clearing it on the others)."""
+    _rpc("set_primary_resume", {"p_id": resume_id})
+    applog.log("resume_set_primary", "data")
 
 
 def count_resumes() -> int:
     return len(_call("GET", "resumes", params={"select": "id"}) or [])
 
 
-def save_resume(resume_id: Optional[str], label: str, resume: ResumeData) -> str:
-    """Create (resume_id None) or update a résumé. Returns its id."""
+def save_resume(resume_id: Optional[str], label: str, resume: ResumeData, *,
+                primary: bool = False) -> str:
+    """Create (resume_id None) or update a résumé. Returns its id. `primary` only
+    applies to a new résumé (an existing one keeps whatever it is)."""
     uid, dek = _uid(), _dek()
     row_id = resume_id or str(uuid.uuid4())
     blob = crypto.encrypt_json(dek, uid, "resume", row_id,
@@ -187,17 +229,28 @@ def save_resume(resume_id: Optional[str], label: str, resume: ResumeData) -> str
         _call("PATCH", "resumes", params={"id": f"eq.{row_id}", "user_id": f"eq.{uid}"},
               payload={"data_enc": blob, "schema_version": SCHEMA_VERSION}, prefer="return=minimal")
     else:
-        _call("POST", "resumes",
-              payload=[{"id": row_id, "user_id": uid, "data_enc": blob, "schema_version": SCHEMA_VERSION}],
-              prefer="return=minimal")
+        row = {"id": row_id, "user_id": uid, "data_enc": blob, "schema_version": SCHEMA_VERSION}
+        if primary and primary_supported():
+            row["is_primary"] = True
+        _call("POST", "resumes", payload=[row], prefer="return=minimal")
         applog.log("resume_created", "data")
     return row_id
 
 
 def delete_resume(resume_id: str) -> None:
+    """Delete a résumé. If it was the primary one, the most recently edited remaining
+    résumé becomes primary so there's always one to load."""
+    was_primary = False
+    if primary_supported():
+        current = primary_resume()
+        was_primary = bool(current and current.id == resume_id)
     _call("DELETE", "resumes", params={"id": f"eq.{resume_id}", "user_id": f"eq.{_uid()}"},
           prefer="return=minimal")
     applog.log("resume_deleted", "data")
+    if was_primary:
+        remaining = list_resumes()
+        if remaining:
+            set_primary_resume(remaining[0].id)
 
 
 # --- Cover letters -----------------------------------------------------------
@@ -355,7 +408,8 @@ def export_all() -> Dict[str, Any]:
     return {
         "exported_at": _now_iso(),
         "email": user.get("email", ""),
-        "resumes": [{"label": r.label, "updated_at": r.updated_at, **r.resume.to_dict()}
+        "resumes": [{"label": r.label, "updated_at": r.updated_at, "primary": r.is_primary,
+                     **r.resume.to_dict()}
                     for r in list_resumes()],
         "cover_letters": [asdict(c) for c in list_cover_letters()],
         "saved_jobs": [{"status": j.status, "saved_at": j.saved_at, "notes": j.notes, **j.job}

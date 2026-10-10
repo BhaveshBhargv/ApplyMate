@@ -24,6 +24,7 @@ _ACTIVE_LABEL = "_active_resume_label"
 _SAVED_HASH = "_saved_resume_hash"
 _BOOTSTRAPPED = "_bootstrapped_for"
 _LAST_ERROR = "_autosave_last_error"
+_ACTIVE_PRIMARY = "_active_resume_primary"
 
 
 def _fingerprint(resume: ResumeData) -> str:
@@ -44,8 +45,14 @@ def active_resume_label() -> str:
     return st.session_state.get(_ACTIVE_LABEL, "")
 
 
+def active_is_primary() -> bool:
+    """True if the résumé being edited is the user's primary one."""
+    return bool(st.session_state.get(_ACTIVE_PRIMARY))
+
+
 def bootstrap() -> Optional[str]:
-    """Run once per login. Returns an error message to show, or None."""
+    """Run once per login: loads the primary résumé (else the most recently edited).
+    Returns an error message to show, or None."""
     user = auth.current_user()
     if not user or st.session_state.get(_BOOTSTRAPPED) == user["id"]:
         return None
@@ -67,6 +74,7 @@ def open_resume(saved: "db.SavedResume") -> None:
     set_resume_data(saved.resume)
     st.session_state[_ACTIVE_ID] = saved.id
     st.session_state[_ACTIVE_LABEL] = saved.label
+    st.session_state[_ACTIVE_PRIMARY] = saved.is_primary
     st.session_state[_SAVED_HASH] = _fingerprint(saved.resume)
     refresh_field("personal_summary")   # the summary box is keyed; make it re-read the new text
 
@@ -77,8 +85,63 @@ def new_resume() -> None:
     set_resume_data(blank)
     st.session_state.pop(_ACTIVE_ID, None)
     st.session_state.pop(_ACTIVE_LABEL, None)
+    st.session_state.pop(_ACTIVE_PRIMARY, None)
     st.session_state[_SAVED_HASH] = _fingerprint(blank)
     refresh_field("personal_summary")
+
+
+def load_primary() -> str:
+    """Replace the résumé in the builder with the user's primary one. Returns '' on
+    success, else a message to show. Edits to the current résumé are already stored
+    (autosave runs at the end of every run), so nothing is lost by switching."""
+    try:
+        autosave()   # make sure the résumé being left is stored first
+        primary = db.primary_resume()
+    except db.DataError as exc:
+        return str(exc)
+    if primary is None:
+        return "You haven't set a primary résumé yet."
+    open_resume(primary)
+    return ""
+
+
+def make_active_primary() -> str:
+    """Mark the résumé being edited as the primary one, saving it first if it has
+    never been stored. Returns '' on success, else a message to show."""
+    resume = get_resume_data()
+    if _ACTIVE_ID not in st.session_state and not _has_content(resume):
+        return "Add some details to the résumé first."
+    try:
+        st.session_state.pop(_SAVED_HASH, None)   # force a write if anything is pending
+        autosave()
+        rid = active_resume_id()
+        if rid is None:
+            return "Couldn't save the résumé, so it can't be made primary."
+        db.set_primary_resume(rid)
+    except db.DataError as exc:
+        return str(exc)
+    st.session_state[_ACTIVE_PRIMARY] = True
+    return ""
+
+
+def set_primary(resume_id: str) -> str:
+    """Make a stored résumé primary (from My Account). Returns '' or a message."""
+    try:
+        db.set_primary_resume(resume_id)
+    except db.DataError as exc:
+        return str(exc)
+    st.session_state[_ACTIVE_PRIMARY] = (resume_id == active_resume_id())
+    return ""
+
+
+def refresh_primary_flag() -> None:
+    """Re-read which résumé is primary (e.g. after deleting the old primary, which
+    promotes another) so the builder's badge matches the database."""
+    try:
+        primary = db.primary_resume()
+    except db.DataError:
+        return
+    st.session_state[_ACTIVE_PRIMARY] = bool(primary and primary.id == active_resume_id())
 
 
 def rename_active(label: str) -> None:
@@ -97,9 +160,14 @@ def autosave() -> None:
     if _ACTIVE_ID not in st.session_state and not _has_content(resume):
         return
     try:
+        existing = None if _ACTIVE_ID in st.session_state else db.count_resumes()
         label = st.session_state.get(_ACTIVE_LABEL) or (
-            "My résumé" if db.count_resumes() == 0 else f"Résumé {db.count_resumes() + 1}")
-        st.session_state[_ACTIVE_ID] = db.save_resume(st.session_state.get(_ACTIVE_ID), label, resume)
+            "My résumé" if not existing else f"Résumé {existing + 1}")
+        # A user's first résumé becomes their primary one automatically.
+        st.session_state[_ACTIVE_ID] = db.save_resume(
+            st.session_state.get(_ACTIVE_ID), label, resume, primary=(existing == 0))
+        if existing == 0 and db.primary_supported():
+            st.session_state[_ACTIVE_PRIMARY] = True
         st.session_state[_ACTIVE_LABEL] = label
         st.session_state[_SAVED_HASH] = fingerprint
         st.session_state.pop(_LAST_ERROR, None)

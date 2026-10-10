@@ -102,15 +102,24 @@ if section == "Résumés":
             label = account.active_resume_label() if is_active else saved.label
             st.markdown(
                 f'<div class="rb-acct-title">{escape(label or saved.label)}'
+                f'{" · ★ primary" if saved.is_primary else ""}'
                 f'{" · editing now" if is_active else ""}</div>'
                 f'<div class="rb-acct-sub">Updated {escape(_when(saved.updated_at))}</div>',
                 unsafe_allow_html=True,
             )
-            c1, c2, c3 = st.columns([1.2, 2.2, 1.2])
+            c1, cp, c2, c3 = st.columns([1.3, 1.3, 1.1, 1.1])
             if c1.button("Open in builder", key=f"res_open_{saved.id}", width="stretch",
                          disabled=is_active):
                 account.open_resume(saved)
                 st.switch_page("pages/1_🧭_Dashboard.py")
+            if cp.button("★ Primary" if saved.is_primary else "Make primary", key=f"res_primary_{saved.id}",
+                         width="stretch", disabled=saved.is_primary or not db.primary_supported(),
+                         help="Your primary résumé opens first whenever you log in."):
+                problem = account.set_primary(saved.id)
+                if problem:
+                    st.error(problem)
+                else:
+                    st.rerun()
             with c2.popover("Rename", width="stretch"):
                 new_label = st.text_input("Name", value=label, key=f"res_label_{saved.id}", max_chars=80)
                 if st.button("Save name", key=f"res_rename_{saved.id}"):
@@ -125,6 +134,7 @@ if section == "Résumés":
                     if _attempt(lambda: db.delete_resume(saved.id)):
                         if is_active:
                             account.new_resume()
+                        account.refresh_primary_flag()
                         st.rerun()
 
 # --- Cover letters -------------------------------------------------------------

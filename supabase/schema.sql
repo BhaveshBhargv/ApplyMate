@@ -35,6 +35,10 @@ create table if not exists public.resumes (
 );
 create index if not exists resumes_user_idx on public.resumes (user_id, updated_at desc);
 
+-- Which of the user's résumés is their primary one (loaded first on login). Added after the
+-- first release, so this is an ALTER: re-running the whole file upgrades an existing database.
+alter table public.resumes add column if not exists is_primary boolean not null default false;
+
 create table if not exists public.cover_letters (
     id         uuid primary key,
     user_id    uuid not null references auth.users (id) on delete cascade,
@@ -125,10 +129,14 @@ revoke insert, update, delete on public.ai_usage from authenticated;
 -- Triggers: updated_at + per-user limits (free-tier sizing)
 -- ---------------------------------------------------------------------------
 
+-- Bumps updated_at only when the stored content changes (not, e.g., when a résumé is
+-- merely marked primary), so "most recently edited" stays meaningful.
 create or replace function public.set_updated_at() returns trigger
 language plpgsql as $$
 begin
-    new.updated_at := now();
+    if new.data_enc is distinct from old.data_enc then
+        new.updated_at := now();
+    end if;
     return new;
 end $$;
 
@@ -262,11 +270,23 @@ begin
     delete from auth.users where id = uid;
 end $$;
 
+-- Marks one résumé as the caller's primary and clears the flag on all the others, atomically.
+-- SECURITY INVOKER: row level security still limits it to the caller's own rows.
+create or replace function public.set_primary_resume(p_id uuid) returns void
+language sql security invoker set search_path = '' as $$
+    update public.resumes
+       set is_primary = (id = p_id)
+     where user_id = (select auth.uid())
+       and (is_primary or id = p_id);
+$$;
+
 -- Who may call what.
 revoke execute on function public.consume_ai_call()    from public, anon, authenticated;
 revoke execute on function public.ai_quota()           from public, anon, authenticated;
 revoke execute on function public.delete_my_account()  from public, anon, authenticated;
 revoke execute on function public.log_event(text, text, text, jsonb, text) from public, anon, authenticated;
+revoke execute on function public.set_primary_resume(uuid) from public, anon, authenticated;
+grant  execute on function public.set_primary_resume(uuid) to authenticated;
 grant  execute on function public.consume_ai_call()    to authenticated;
 grant  execute on function public.ai_quota()           to authenticated;
 grant  execute on function public.delete_my_account()  to authenticated;
