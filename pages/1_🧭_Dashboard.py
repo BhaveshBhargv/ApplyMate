@@ -35,25 +35,50 @@ def _primary_controls() -> None:
         return
     account.autosave()   # store this run's edits now, so the status below is current
     is_primary = account.active_is_primary()
+    blank = account.is_blank_new()
     name = account.active_resume_label() or "New résumé (not saved yet)"
     st.markdown(f"Editing **{name}**" + (" · ★ primary" if is_primary else ""))
-    if not db.primary_supported():
+    if blank and account.has_primary():
+        st.caption("The builder starts empty — load your primary résumé to keep editing it.")
+
+    # Only offer what applies right now, so there are never dead buttons:
+    #  * Set as primary -- a saved résumé that isn't the primary one
+    #  * Load primary   -- a primary exists and isn't already the one in the builder
+    #  * New CV         -- there's something in the builder to start over from
+    primary_ok = db.primary_supported()
+    actions = []
+    if primary_ok and not blank and not is_primary:
+        actions.append("make")
+    if primary_ok and account.has_primary() and not is_primary:
+        actions.append("load")
+    if not blank:
+        actions.append("new")
+    if not primary_ok:
         st.caption("Primary résumés need the latest database schema (re-run supabase/schema.sql).")
+    if not actions:
         return
-    p1, p2 = st.columns(2)
-    if p1.button("Set as primary", key="dash_make_primary", width="stretch", disabled=is_primary,
-                 help="Make this résumé the one that opens first every time you log in."):
-        problem = account.make_active_primary()
-        if problem:
-            st.error(problem)
-        else:
-            st.rerun()
-    if p2.button("Load primary", key="dash_load_primary", width="stretch", disabled=is_primary,
-                 help="Replace what's in the builder with your primary résumé, ready to edit."):
-        problem = account.load_primary()
-        if problem:
-            st.error(problem)
-        else:
+    for slot, action in zip(st.columns(len(actions)), actions):
+        if action == "make" and slot.button(
+                "Set as primary", key="dash_make_primary", width="stretch",
+                help="Make this résumé the one you load first."):
+            problem = account.make_active_primary()
+            if problem:
+                st.error(problem)
+            else:
+                st.rerun()
+        elif action == "load" and slot.button(
+                "Load primary", key="dash_load_primary", width="stretch",
+                help="Replace what's in the builder with your primary résumé, ready to edit."):
+            problem = account.load_primary()
+            if problem:
+                st.error(problem)
+            else:
+                st.rerun()
+        elif action == "new" and slot.button(
+                "New CV", key="dash_new_cv", width="stretch",
+                help="Start a blank résumé. The one you're editing stays saved."):
+            account.autosave()
+            account.new_resume()
             st.rerun()
 
 

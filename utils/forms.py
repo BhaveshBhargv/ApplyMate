@@ -15,7 +15,7 @@ from utils import ai_assistant, resume_ai_parser
 from utils.date_picker import is_start_after_end, month_year_input
 from utils.resume_parser import extract_text, parse_resume
 from utils.session_manager import (
-    refresh_field,
+    refresh_personal_fields,
     add_education,
     add_experience,
     add_project,
@@ -40,13 +40,19 @@ def render_personal() -> None:
     with st.form("f_personal"):
         c1, c2 = st.columns(2)
         with c1:
-            full_name = st.text_input("Full name *", value=info.full_name, placeholder="First & Last Name")
-            email = st.text_input("Email *", value=info.email, placeholder="jordan@example.com")
-            phone = st.text_input("Phone * (with country code)", value=info.phone, placeholder="+1 555-123-4567")
+            full_name = st.text_input("Full name *", value=info.full_name, placeholder="First & Last Name",
+                                      key=form_key("personal_name"))
+            email = st.text_input("Email *", value=info.email, placeholder="jordan@example.com",
+                                  key=form_key("personal_email"))
+            phone = st.text_input("Phone * (with country code)", value=info.phone, placeholder="+1 555-123-4567",
+                                  key=form_key("personal_phone"))
         with c2:
-            location = st.text_input("Location", value=info.location, placeholder="City, Country")
-            linkedin = st.text_input("LinkedIn URL", value=info.linkedin_url, placeholder="linkedin.com/in/you")
-            portfolio = st.text_input("Portfolio / GitHub URL", value=info.portfolio_url, placeholder="github.com/you")
+            location = st.text_input("Location", value=info.location, placeholder="City, Country",
+                                     key=form_key("personal_location"))
+            linkedin = st.text_input("LinkedIn URL", value=info.linkedin_url, placeholder="linkedin.com/in/you",
+                                     key=form_key("personal_linkedin"))
+            portfolio = st.text_input("Portfolio / GitHub URL", value=info.portfolio_url,
+                                      placeholder="github.com/you", key=form_key("personal_portfolio"))
         summary = st.text_area(
             "Professional summary", value=info.professional_summary,
             key=form_key("personal_summary"), height=110,
@@ -316,7 +322,7 @@ def process_pending_import() -> None:
             return
 
     set_resume_data(parsed)
-    refresh_field("personal_summary")   # the summary box is keyed; make it show the new text
+    refresh_personal_fields()   # the Personal tab's boxes are keyed; make them show the new résumé
     note = ""
     if ai_error:
         note = (f" AI parsing wasn't available ({ai_error}), so a simpler rule-based parser was "

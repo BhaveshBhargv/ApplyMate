@@ -249,6 +249,7 @@ else:
             if _attempt(db.delete_all_data):
                 account.new_resume()
                 st.session_state.pop("_export_json", None)
+                account.refresh_primary_flag()
                 st.success("All your résumés, cover letters and saved jobs have been deleted.")
 
     st.markdown("#### Delete your account")

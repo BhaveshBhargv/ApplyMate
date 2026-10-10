@@ -9,6 +9,7 @@ swapped later without touching every page.
 """
 import streamlit as st
 
+from utils.date_picker import month_year_to_ordinal
 from models.resume_data import (
     EducationEntry,
     ExperienceEntry,
@@ -28,10 +29,36 @@ def init_session_state() -> None:
         st.session_state[_RESUME_KEY] = ResumeData()
 
 
+_CURRENT_ORDINAL = 10 ** 9   # an ongoing entry counts as the latest possible
+
+
+def _date_sort_key(entry) -> tuple:
+    """Most recent first: ongoing entries on top, then by end date (start date breaks
+    ties). Entries with no usable date go last, keeping their relative order."""
+    start = month_year_to_ordinal(entry.start_date)
+    end = _CURRENT_ORDINAL if entry.is_current else month_year_to_ordinal(entry.end_date)
+    recency = end if end is not None else start
+    if recency is None:
+        return (1, 0, 0)
+    return (0, -recency, -(start or 0))
+
+
+def sort_entries_by_date(resume: ResumeData) -> None:
+    """Keep Education and Experience newest-first, automatically. Python's sort is
+    stable, so equal/undated entries never swap places, and a list that's already in
+    order is left untouched. Projects and skills carry no dates, so they're not sorted."""
+    resume.education.sort(key=_date_sort_key)
+    resume.experience.sort(key=_date_sort_key)
+
+
 def get_resume_data() -> ResumeData:
-    """Return the current session's ResumeData, creating it if needed."""
+    """Return the current session's ResumeData, creating it if needed. Dated sections
+    (education, experience) are kept sorted newest-first every time it's read, so a
+    saved date change, an import or a loaded résumé always shows in the right order."""
     init_session_state()
-    return st.session_state[_RESUME_KEY]
+    resume = st.session_state[_RESUME_KEY]
+    sort_entries_by_date(resume)
+    return resume
 
 
 def set_resume_data(new_resume: ResumeData) -> None:
@@ -90,6 +117,20 @@ def refresh_field(base: str) -> None:
     widget key, so it avoids Streamlit's "cannot modify after instantiation" error.
     """
     st.session_state[f"__rev_{base}"] = st.session_state.get(f"__rev_{base}", 0) + 1
+
+
+# Personal-tab widgets that show résumé-level values. They're keyed through form_key() so the
+# whole set can be reset when a different résumé is put in the builder (see
+# refresh_personal_fields) -- otherwise Streamlit hands back the text typed into an earlier
+# résumé whenever a widget's default value happens to match one it has seen before.
+PERSONAL_FIELDS = ("personal_name", "personal_email", "personal_phone", "personal_location",
+                   "personal_linkedin", "personal_portfolio", "personal_summary")
+
+
+def refresh_personal_fields() -> None:
+    """Make the Personal tab re-read every field from the résumé on the next run."""
+    for base in PERSONAL_FIELDS:
+        refresh_field(base)
 
 
 def add_education() -> EducationEntry:

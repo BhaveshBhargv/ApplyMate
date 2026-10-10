@@ -1,6 +1,7 @@
 """Glue between the signed-in user's saved résumés and the live Streamlit session.
 
-  bootstrap()  -- after login: unlock the user's key, load their latest résumé
+  bootstrap()  -- after login: unlock the user's key; the builder starts EMPTY (the user
+                  picks "Load primary" / "New CV" / a résumé from My Account)
   autosave()   -- end of every run: if the résumé changed, store it (encrypted)
   open_resume / new_resume -- switch which saved résumé is being edited
 
@@ -17,7 +18,7 @@ import streamlit as st
 
 from models.resume_data import ResumeData
 from utils import auth, db
-from utils.session_manager import get_resume_data, refresh_field, set_resume_data
+from utils.session_manager import get_resume_data, refresh_personal_fields, set_resume_data
 
 _ACTIVE_ID = "_active_resume_id"
 _ACTIVE_LABEL = "_active_resume_label"
@@ -25,6 +26,7 @@ _SAVED_HASH = "_saved_resume_hash"
 _BOOTSTRAPPED = "_bootstrapped_for"
 _LAST_ERROR = "_autosave_last_error"
 _ACTIVE_PRIMARY = "_active_resume_primary"
+_HAS_PRIMARY = "_has_primary_resume"
 
 
 def _fingerprint(resume: ResumeData) -> str:
@@ -50,8 +52,19 @@ def active_is_primary() -> bool:
     return bool(st.session_state.get(_ACTIVE_PRIMARY))
 
 
+def has_primary() -> bool:
+    """True if the user has a primary résumé stored (so "Load primary" can work)."""
+    return bool(st.session_state.get(_HAS_PRIMARY))
+
+
+def is_blank_new() -> bool:
+    """True when the builder holds an empty, never-saved résumé (a fresh login or a
+    just-started new CV) -- there's nothing to set as primary or to start over from."""
+    return _ACTIVE_ID not in st.session_state and not _has_content(get_resume_data())
+
+
 def bootstrap() -> Optional[str]:
-    """Run once per login: loads the primary résumé (else the most recently edited).
+    """Run once per login. The builder starts empty: the user chooses what to work on.
     Returns an error message to show, or None."""
     user = auth.current_user()
     if not user or st.session_state.get(_BOOTSTRAPPED) == user["id"]:
@@ -61,10 +74,8 @@ def bootstrap() -> Optional[str]:
         saved = db.list_resumes()
     except db.DataError as exc:
         return str(exc)
-    if saved:
-        open_resume(saved[0])
-    else:
-        st.session_state[_SAVED_HASH] = _fingerprint(get_resume_data())
+    st.session_state[_HAS_PRIMARY] = any(r.is_primary for r in saved)
+    st.session_state[_SAVED_HASH] = _fingerprint(get_resume_data())
     st.session_state[_BOOTSTRAPPED] = user["id"]
     return None
 
@@ -76,7 +87,7 @@ def open_resume(saved: "db.SavedResume") -> None:
     st.session_state[_ACTIVE_LABEL] = saved.label
     st.session_state[_ACTIVE_PRIMARY] = saved.is_primary
     st.session_state[_SAVED_HASH] = _fingerprint(saved.resume)
-    refresh_field("personal_summary")   # the summary box is keyed; make it re-read the new text
+    refresh_personal_fields()   # the Personal tab's boxes are keyed; make them re-read the new résumé
 
 
 def new_resume() -> None:
@@ -87,7 +98,7 @@ def new_resume() -> None:
     st.session_state.pop(_ACTIVE_LABEL, None)
     st.session_state.pop(_ACTIVE_PRIMARY, None)
     st.session_state[_SAVED_HASH] = _fingerprint(blank)
-    refresh_field("personal_summary")
+    refresh_personal_fields()
 
 
 def load_primary() -> str:
@@ -121,6 +132,7 @@ def make_active_primary() -> str:
     except db.DataError as exc:
         return str(exc)
     st.session_state[_ACTIVE_PRIMARY] = True
+    st.session_state[_HAS_PRIMARY] = True
     return ""
 
 
@@ -131,6 +143,7 @@ def set_primary(resume_id: str) -> str:
     except db.DataError as exc:
         return str(exc)
     st.session_state[_ACTIVE_PRIMARY] = (resume_id == active_resume_id())
+    st.session_state[_HAS_PRIMARY] = True
     return ""
 
 
@@ -142,6 +155,7 @@ def refresh_primary_flag() -> None:
     except db.DataError:
         return
     st.session_state[_ACTIVE_PRIMARY] = bool(primary and primary.id == active_resume_id())
+    st.session_state[_HAS_PRIMARY] = primary is not None
 
 
 def rename_active(label: str) -> None:
@@ -168,6 +182,7 @@ def autosave() -> None:
             st.session_state.get(_ACTIVE_ID), label, resume, primary=(existing == 0))
         if existing == 0 and db.primary_supported():
             st.session_state[_ACTIVE_PRIMARY] = True
+            st.session_state[_HAS_PRIMARY] = True
         st.session_state[_ACTIVE_LABEL] = label
         st.session_state[_SAVED_HASH] = fingerprint
         st.session_state.pop(_LAST_ERROR, None)
