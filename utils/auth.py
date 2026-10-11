@@ -200,13 +200,40 @@ def _email_code(purpose: str, email: str) -> Tuple[bool, str]:
     return True, ""
 
 
+def _signup_email(email: str) -> Tuple[bool, str]:
+    """Send the right email for a sign-up attempt, without letting the screen reveal which.
+
+    New address     -> a verification code.
+    Existing account-> a "you already have an account" notice instead of a code. A code is still
+                       issued internally (and never sent), so typing a wrong code behaves exactly
+                       as it does for a new address and nothing on screen differs."""
+    try:
+        exists = bool(admin.user_id_by_email(email))
+    except sb.SupabaseError as exc:
+        applog.log("signup_lookup_failed", "auth", "error", code=exc.code, status=exc.status or 0)
+        return False, "Something went wrong. Please try again."
+    if not exists:
+        return _email_code("signup", email)
+    if not otp.allow_send(email):
+        return False, "Too many codes were requested for this email. Please try again in an hour."
+    otp.issue("signup", email)   # decoy: never emailed, so no code can ever succeed for this address
+    try:
+        mailer.send_account_exists(email)
+    except mailer.MailError:
+        otp.clear("signup")
+        applog.log("signup_email_failed", "auth", "error")
+        return False, "We couldn't send the email. Please try again in a moment."
+    applog.log("signup_existing_account_notice", "auth")
+    return True, ""
+
+
 def sign_up(email: str, password: str) -> Tuple[bool, str]:
     """Step 1 of sign-up: email a code. The account is only created (already verified) once
     the code is entered -- see verify_signup. Never reveals whether the email is registered."""
     email = email.strip().lower()
     if not email_ready():
         return False, _NOT_READY
-    sent, problem = _email_code("signup", email)
+    sent, problem = _signup_email(email)
     if not sent:
         return False, problem
     st.session_state[_VERIFY_EMAIL] = email
@@ -216,7 +243,7 @@ def sign_up(email: str, password: str) -> Tuple[bool, str]:
 
 def send_signup_code(email: str) -> Tuple[bool, str]:
     """Send a fresh sign-up code (after the resend cooldown, which the UI enforces)."""
-    return _email_code("signup", email)
+    return _signup_email(email)
 
 
 def verify_signup(email: str, code: str) -> Tuple[bool, str]:

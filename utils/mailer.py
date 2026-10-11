@@ -119,6 +119,26 @@ def send_signup_code(to: str, code: str, minutes: int) -> None:
     )
 
 
+def send_account_exists(to: str) -> None:
+    """Sent instead of a sign-up code when the address already has an account, so the person
+    finds out at once -- while the sign-up screen looks the same as for a new address."""
+    send_email(
+        to, "You already have an ApplyMate account",
+        "Someone (hopefully you) tried to create an ApplyMate account with this email address, "
+        "but an account already exists.\n\nOpen ApplyMate and choose Log in. If you've forgotten "
+        "your password, choose Forgot password and we'll email you a code to reset it.\n\n"
+        "If this wasn't you, you can ignore this email -- nothing has changed.",
+        '<div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:auto;color:#18181B">'
+        '<h2 style="margin:0 0 12px">You already have an account</h2>'
+        "<p>Someone (hopefully you) tried to create an ApplyMate account with this email address, "
+        "but an account already exists.</p>"
+        "<p>Open ApplyMate and choose <b>Log in</b>. If you've forgotten your password, choose "
+        "<b>Forgot password</b> and we'll email you a code to reset it.</p>"
+        '<p style="color:#71717A;font-size:13px">If this wasn\'t you, ignore this email -- '
+        "nothing has changed.</p></div>",
+    )
+
+
 def send_reset_code(to: str, code: str, minutes: int) -> None:
     send_email(
         to, "Your ApplyMate password reset code",

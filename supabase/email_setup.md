@@ -63,7 +63,9 @@ Existing users are unaffected.
   not by the password.
 - The "Forgot password" screen answers the same way whether or not the email has an account, and
   sends nothing for unknown addresses.
-- Signing up with an address that already has an account can't change that account: even with the
-  mailbox code the create step fails and the original password stays.
+- Signing up with an address that already has an account: that address is emailed a "you already
+  have an ApplyMate account -- log in or use Forgot password" notice instead of a code. The sign-up
+  screen looks identical to the new-address case (no "already exists" message), and no code can
+  succeed, so the existing account can't be taken over and its owner learns about it immediately.
 - If the code screen is refreshed or the server restarts mid-way, the code is lost: request a new one.
 - If SMTP or the service key is missing, sign-up and reset show "isn't set up yet" instead of failing.
