@@ -50,7 +50,7 @@ _CSS = f"""
 [data-testid="stMainBlockContainer"] {{ max-width: 1240px; padding: 1.3rem 2.4rem 4rem; }}
 
 /* Top bar */
-.st-key-am_cookie {{ position: absolute; height: 0; width: 0; overflow: hidden; margin: 0; }}
+[class*="st-key-am_"] {{ position: absolute; height: 0; width: 0; overflow: hidden; margin: 0; }}
 .rb-header {{ display: flex; align-items: baseline; gap: 0.5rem; }}
 .rb-word {{ font-family: var(--display) !important; font-weight: 800; font-size: 1.55rem !important;
   color: var(--text); letter-spacing: -0.04em; line-height: 1; }}
@@ -177,6 +177,23 @@ hr {{ border-color: var(--line); background: var(--line); }}
 def inject_theme() -> None:
     """Inject the app stylesheet. Call once at the top of every page."""
     st.markdown(_CSS, unsafe_allow_html=True)
+
+
+def scroll_to(anchor_id: str) -> None:
+    """Scroll the page so the element with id `anchor_id` is at the top of the view.
+
+    Streamlit keeps the scroll position across reruns, so a pager click leaves you at the
+    bottom of the page. A zero-size component runs a one-line script in the browser; its
+    text changes every call so the browser re-runs it each time. (Needs a same-origin
+    iframe, which components.html provides.)"""
+    import time
+
+    import streamlit.components.v1 as components
+
+    script = (f"const el = window.parent.document.getElementById({anchor_id!r});"
+              "if (el) { el.scrollIntoView({block: 'start'}); }")
+    with st.container(key="am_scroll"):
+        components.html(f"<script>try {{ {script} }} catch (e) {{}} /* {time.time()} */</script>", height=0)
 
 
 def section_picker(options, key: str) -> str:

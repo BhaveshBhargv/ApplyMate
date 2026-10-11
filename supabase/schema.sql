@@ -280,6 +280,18 @@ language sql security invoker set search_path = '' as $$
        and (is_primary or id = p_id);
 $$;
 
+-- Admin helpers for ApplyMate's own sign-up verification and password reset. They read/modify
+-- the auth schema, so they are callable ONLY by the service role (never by anon/authenticated).
+create or replace function public.admin_user_id_by_email(p_email text) returns uuid
+language sql security definer stable set search_path = '' as $$
+    select id from auth.users where lower(email) = lower(p_email) limit 1
+$$;
+
+create or replace function public.admin_revoke_sessions(p_user uuid) returns void
+language sql security definer set search_path = '' as $$
+    delete from auth.sessions where user_id = p_user   -- refresh tokens go with their session
+$$;
+
 -- Who may call what.
 revoke execute on function public.consume_ai_call()    from public, anon, authenticated;
 revoke execute on function public.ai_quota()           from public, anon, authenticated;
@@ -287,6 +299,10 @@ revoke execute on function public.delete_my_account()  from public, anon, authen
 revoke execute on function public.log_event(text, text, text, jsonb, text) from public, anon, authenticated;
 revoke execute on function public.set_primary_resume(uuid) from public, anon, authenticated;
 grant  execute on function public.set_primary_resume(uuid) to authenticated;
+revoke execute on function public.admin_user_id_by_email(text) from public, anon, authenticated;
+revoke execute on function public.admin_revoke_sessions(uuid)   from public, anon, authenticated;
+grant  execute on function public.admin_user_id_by_email(text) to service_role;
+grant  execute on function public.admin_revoke_sessions(uuid)   to service_role;
 grant  execute on function public.consume_ai_call()    to authenticated;
 grant  execute on function public.ai_quota()           to authenticated;
 grant  execute on function public.delete_my_account()  to authenticated;

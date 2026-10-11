@@ -26,14 +26,17 @@ ApplyMate runs behind a login (Supabase Auth, email + password). Each user's
 résumés, cover letters and saved jobs live in a Supabase Postgres database,
 **encrypted by the app before they are stored** (AES-256-GCM, one random key per
 user, wrapped by `ENCRYPTION_MASTER_KEY`). Row Level Security restricts every
-request to the signed-in user's own rows, and the app only ever uses the
-publishable key -- never the `service_role` key.
+request to the signed-in user's own rows. The app uses the publishable key plus
+the user's own login token for everything user-facing; the powerful `service_role`
+key is used only by the narrow admin module that creates verified accounts and
+resets passwords (`utils/supabase_admin.py`).
 
 One-time setup:
 
 1. Supabase -> SQL Editor -> run [`supabase/schema.sql`](supabase/schema.sql).
-2. Supabase -> Authentication -> Providers -> Email -> turn **Confirm email** off
-   (or leave it on and configure custom SMTP for production).
+2. Email codes: ApplyMate sends its own sign-up and password-reset codes. Configure an SMTP
+   provider, add the service_role key, turn off public sign-ups -- see
+   [`supabase/email_setup.md`](supabase/email_setup.md).
 3. Add `SUPABASE_URL`, `SUPABASE_KEY` and `ENCRYPTION_MASTER_KEY` to
    `.streamlit/secrets.toml` (and to the Streamlit Cloud secrets). See
    `.streamlit/secrets.toml.example`. **Back up the master key**: without it,

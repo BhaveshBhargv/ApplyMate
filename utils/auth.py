@@ -16,7 +16,8 @@ from typing import Optional, Tuple
 import streamlit as st
 import streamlit.components.v1 as components
 
-from utils import applog
+from utils import applog, mailer, otp
+from utils import supabase_admin as admin
 from utils import supabase_client as sb
 from utils.theme import section_picker
 from utils.validators import is_valid_email
@@ -28,6 +29,10 @@ _PENDING_COOKIE = "_cookie_pending"
 _RESTORE_TRIED = "_restore_tried"
 _LOGGED_OUT = "_logged_out"
 _MIN_PASSWORD = 8
+_VERIFY_EMAIL = "_verify_email"      # address waiting for its sign-up code
+_VERIFY_PASSWORD = "_verify_password"  # held in server memory only until the code is entered
+_RESET_EMAIL = "_reset_email"        # address a password-reset code was sent to
+_MINUTES = otp.CODE_TTL_SECONDS // 60
 
 
 # --- Session state -----------------------------------------------------------
@@ -144,14 +149,15 @@ def _friendly(exc: sb.SupabaseError, *, signing_up: bool) -> str:
         return exc.message
     if exc.status == 429 or "rate" in code:
         return "Too many attempts. Please wait a minute and try again."
-    if code in ("user_already_exists", "email_exists") or "already registered" in text:
+    if code in ("user_already_exists", "email_exists") or "already registered" in text \
+            or "already been registered" in text:
         return "An account with this email already exists. Log in instead."
     if code == "weak_password" or "password" in text and signing_up:
         return exc.message
+    if code == "same_password":
+        return "Choose a password you haven't used before."
     if code == "email_address_invalid" or "invalid email" in text:
         return "That email address doesn't look valid."
-    if code == "signup_disabled":
-        return "New sign-ups are switched off right now."
     if not signing_up and (code == "invalid_credentials" or exc.status in (400, 401)):
         return "Incorrect email or password."
     return "Something went wrong. Please try again."
@@ -170,19 +176,120 @@ def log_in(email: str, password: str) -> Tuple[bool, str]:
     return True, ""
 
 
-def sign_up(email: str, password: str) -> Tuple[bool, str]:
+def email_ready() -> bool:
+    """True when the app can send codes and create/administer accounts."""
+    return mailer.is_configured() and admin.is_configured()
+
+
+_NOT_READY = ("Email verification isn't set up on this server yet, so accounts can't be created "
+              "or reset right now. Please try again later.")
+
+
+def _email_code(purpose: str, email: str) -> Tuple[bool, str]:
+    """Issue a code and email it. Returns (sent, message-if-not)."""
+    if not otp.allow_send(email):
+        return False, "Too many codes were requested for this email. Please try again in an hour."
+    code = otp.issue(purpose, email)
     try:
-        response = sb.sign_up(email.strip().lower(), password)
+        (mailer.send_signup_code if purpose == "signup" else mailer.send_reset_code)(email, code, _MINUTES)
+    except mailer.MailError:
+        otp.clear(purpose)
+        applog.log(f"{purpose}_email_failed", "auth", "error")
+        return False, "We couldn't send the email. Please try again in a moment."
+    applog.log(f"{purpose}_code_sent", "auth")
+    return True, ""
+
+
+def sign_up(email: str, password: str) -> Tuple[bool, str]:
+    """Step 1 of sign-up: email a code. The account is only created (already verified) once
+    the code is entered -- see verify_signup. Never reveals whether the email is registered."""
+    email = email.strip().lower()
+    if not email_ready():
+        return False, _NOT_READY
+    sent, problem = _email_code("signup", email)
+    if not sent:
+        return False, problem
+    st.session_state[_VERIFY_EMAIL] = email
+    st.session_state[_VERIFY_PASSWORD] = password
+    return False, ""
+
+
+def send_signup_code(email: str) -> Tuple[bool, str]:
+    """Send a fresh sign-up code (after the resend cooldown, which the UI enforces)."""
+    return _email_code("signup", email)
+
+
+def verify_signup(email: str, code: str) -> Tuple[bool, str]:
+    """Check the emailed code; if right, create the verified account and sign the user in."""
+    password = st.session_state.get(_VERIFY_PASSWORD)
+    result = otp.check("signup", email, code)
+    if result != otp.OK:
+        applog.log("signup_verify_failed", "auth", "warning", reason=result)
+        return False, otp.explain(result)
+    if not password:
+        return False, "Your session expired. Please start sign-up again."
+    try:
+        admin.create_confirmed_user(email, password)
     except sb.SupabaseError as exc:
-        applog.log("signup_failed", "auth", "warning", code=exc.code, status=exc.status or 0)
+        applog.log("signup_create_failed", "auth", "warning", code=exc.code, status=exc.status or 0)
+        for key in (_VERIFY_EMAIL, _VERIFY_PASSWORD):
+            st.session_state.pop(key, None)
+        if exc.code == "email_exists" or exc.status == 422:
+            return False, ("An account with this email already exists. Log in, or use Forgot "
+                           "password if you can't remember it.")
         return False, _friendly(exc, signing_up=True)
-    if _store(response):
-        st.session_state.pop(_LOGGED_OUT, None)
-        applog.log("signup_success", "auth")
-        return True, ""
-    # Email confirmation is switched on in Supabase: the account exists but has no session yet.
-    applog.log("signup_pending_confirmation", "auth")
-    return False, "Account created. Check your email to confirm it, then log in."
+    for key in (_VERIFY_EMAIL, _VERIFY_PASSWORD):
+        st.session_state.pop(key, None)
+    applog.log("signup_verified", "auth")
+    ok, message = log_in(email, password)
+    return ok, message
+
+
+def request_password_reset(email: str) -> Tuple[bool, str]:
+    """Email a reset code -- but only if the address has an account. The answer is the same
+    either way, so the form can't be used to find out who is registered."""
+    email = email.strip().lower()
+    if not email_ready():
+        return False, _NOT_READY
+    try:
+        exists = bool(admin.user_id_by_email(email))
+    except sb.SupabaseError as exc:
+        applog.log("reset_lookup_failed", "auth", "error", code=exc.code, status=exc.status or 0)
+        return False, "Something went wrong. Please try again."
+    if exists:
+        sent, problem = _email_code("reset", email)
+        if not sent:
+            return False, problem
+    else:
+        # Same look and timing-ish behaviour; still count it so the form can't be hammered.
+        if not otp.allow_send(email):
+            return False, "Too many codes were requested for this email. Please try again in an hour."
+        otp.clear("reset")
+        applog.log("reset_unknown_email", "auth")
+    st.session_state[_RESET_EMAIL] = email
+    return True, ""
+
+
+def finish_password_reset(email: str, code: str, new_password: str) -> Tuple[bool, str]:
+    """Check the code, set the new password, and sign the account out everywhere. The data
+    stays readable: encryption keys don't depend on the password."""
+    result = otp.check("reset", email, code)
+    if result != otp.OK:
+        applog.log("reset_verify_failed", "auth", "warning", reason=result)
+        return False, otp.explain(result)
+    try:
+        user_id = admin.user_id_by_email(email)
+        if not user_id:
+            return False, "That code didn't work. Ask for a new one."
+        admin.set_password(user_id, new_password)
+        admin.revoke_sessions(user_id)
+    except sb.SupabaseError as exc:
+        applog.log("reset_update_failed", "auth", "error", code=exc.code, status=exc.status or 0)
+        return False, (_friendly(exc, signing_up=True)
+                       + " (That code has now been used, so request a new one to try again.)")
+    st.session_state.pop(_RESET_EMAIL, None)
+    applog.log("password_reset_done", "auth")
+    return True, ""
 
 
 def log_out() -> None:
@@ -238,8 +345,14 @@ def render_login_page() -> None:
         if notice:
             st.success(notice)
 
-        mode = section_picker(["Log in", "Create account"], "login_mode")
-        if mode == "Log in":
+        if st.session_state.get(_VERIFY_EMAIL):
+            _render_verify_form()
+            return
+
+        mode = section_picker(["Log in", "Create account", "Forgot password"], "login_mode")
+        if mode == "Forgot password":
+            _render_reset_flow()
+        elif mode == "Log in":
             with st.form("login_form"):
                 email = st.text_input("Email", key="login_email", autocomplete="email")
                 password = st.text_input("Password", type="password", key="login_password",
@@ -277,9 +390,94 @@ def render_login_page() -> None:
                     st.error("Please tick the box to confirm you've read the privacy notice.")
                 else:
                     ok, message = sign_up(email2, pw1)
-                    if ok:
-                        st.rerun()
-                    if message.startswith("Account created"):
-                        st.success(message)
-                    else:
-                        st.error(message)
+                    if ok or st.session_state.get(_VERIFY_EMAIL):
+                        st.rerun()   # logged in, or on to the "enter your code" step
+                    st.error(message)
+
+
+def _render_verify_form() -> None:
+    """Step 2 of sign-up: enter the code emailed to the new address."""
+    email = st.session_state[_VERIFY_EMAIL]
+    st.markdown("#### Check your email")
+    st.markdown(f"We've sent a verification code to **{email}**. Enter it below to finish creating "
+                f"your account. It's valid for {_MINUTES} minutes.")
+    with st.form("verify_form"):
+        code = st.text_input("Verification code", key="verify_code", max_chars=10, autocomplete="one-time-code")
+        submitted = st.form_submit_button("Verify and continue", type="primary", width="stretch")
+    if submitted:
+        if not code.strip():
+            st.error("Enter the code from the email.")
+        else:
+            ok, message = verify_signup(email, code)
+            if ok:
+                st.rerun()
+            st.error(message)
+    c1, c2 = st.columns(2)
+    if c1.button("Send a new code", key="verify_resend", width="stretch"):
+        wait = otp.seconds_until_resend("signup")
+        if wait:
+            st.warning(f"Please wait {wait}s before asking for another code.")
+        else:
+            ok, message = send_signup_code(email)
+            (st.success("A new code is on its way.") if ok else st.error(message))
+    if c2.button("Use a different email", key="verify_back", width="stretch"):
+        for key in (_VERIFY_EMAIL, _VERIFY_PASSWORD):
+            st.session_state.pop(key, None)
+        otp.clear("signup")
+        st.rerun()
+    st.caption("Can't find it? Check your spam folder. Already have an account? Go back and use "
+               "**Log in** or **Forgot password**.")
+
+
+def _render_reset_flow() -> None:
+    """Forgot password: ask for the email, then the emailed code + a new password."""
+    email = st.session_state.get(_RESET_EMAIL)
+    if not email:
+        st.markdown("Enter the email you signed up with and we'll send you a code to reset your password.")
+        with st.form("reset_request_form"):
+            addr = st.text_input("Email", key="reset_email", autocomplete="email")
+            sent = st.form_submit_button("Send reset code", type="primary", width="stretch")
+        if sent:
+            if not is_valid_email(addr):
+                st.error("Enter a valid email address.")
+            else:
+                ok, message = request_password_reset(addr)
+                if ok:
+                    st.rerun()
+                st.error(message)
+        return
+
+    st.success(f"If **{email}** has an account, a reset code is on its way.")
+    with st.form("reset_finish_form"):
+        code = st.text_input("Reset code", key="reset_code", max_chars=10, autocomplete="one-time-code")
+        pw1 = st.text_input(f"New password (at least {_MIN_PASSWORD} characters)", type="password",
+                            key="reset_pw1", autocomplete="new-password")
+        pw2 = st.text_input("Confirm new password", type="password", key="reset_pw2",
+                            autocomplete="new-password")
+        done = st.form_submit_button("Set new password", type="primary", width="stretch")
+    if done:
+        if not code.strip():
+            st.error("Enter the code from the email.")
+        elif len(pw1) < _MIN_PASSWORD:
+            st.error(f"Your password needs at least {_MIN_PASSWORD} characters.")
+        elif pw1 != pw2:
+            st.error("The two passwords don't match.")
+        else:
+            ok, message = finish_password_reset(email, code, pw1)
+            if ok:
+                st.session_state["_login_notice"] = "Password updated. Log in with your new password."
+                st.session_state["login_mode__last"] = "Log in"
+                st.rerun()
+            st.error(message)
+    c1, c2 = st.columns(2)
+    if c1.button("Send a new code", key="reset_resend", width="stretch"):
+        wait = otp.seconds_until_resend("reset")
+        if wait:
+            st.warning(f"Please wait {wait}s before asking for another code.")
+        else:
+            ok, message = request_password_reset(email)
+            (st.success("A new code is on its way.") if ok else st.error(message))
+    if c2.button("Use a different email", key="reset_back", width="stretch"):
+        st.session_state.pop(_RESET_EMAIL, None)
+        otp.clear("reset")
+        st.rerun()

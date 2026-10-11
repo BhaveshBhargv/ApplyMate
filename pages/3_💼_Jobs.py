@@ -28,7 +28,7 @@ from utils.session_manager import (
     set_cover_letter_target,
     set_job_description,
 )
-from utils.theme import inject_theme, render_download_footer, render_header, render_hero
+from utils.theme import inject_theme, render_download_footer, render_header, render_hero, scroll_to
 
 inject_theme()
 render_header("jobs")
@@ -233,6 +233,11 @@ if result is not None:
         start = page * PAGE_SIZE
         end = min(start + PAGE_SIZE, total)
 
+        # Anchor for the pager: Next/Previous scroll back here, the top of the list.
+        st.markdown('<div id="rb-job-results"></div>', unsafe_allow_html=True)
+        if st.session_state.pop("_scroll_jobs_top", False):
+            scroll_to("rb-job-results")
+
         count_col, sort_col = st.columns([3, 1.3])
         with count_col:
             st.markdown(f'<p class="rb-eyebrow" style="margin-top:.6rem">'
@@ -347,12 +352,14 @@ if result is not None:
             prev_col, mid_col, next_col = st.columns([1, 2, 1])
             if prev_col.button("Previous", key="job_prev", disabled=page == 0, width="stretch"):
                 st.session_state["job_page"] = page - 1
+                st.session_state["_scroll_jobs_top"] = True
                 st.rerun()
             mid_col.markdown(
                 f'<p class="rb-num" style="text-align:center;color:var(--muted);margin:0.5rem 0;font-size:.82rem">'
                 f'Page {page + 1} / {total_pages}</p>', unsafe_allow_html=True)
             if next_col.button("Next", key="job_next", disabled=page >= total_pages - 1, width="stretch"):
                 st.session_state["job_page"] = page + 1
+                st.session_state["_scroll_jobs_top"] = True
                 st.rerun()
 else:
     st.caption("Enter a title and hit **Search jobs** to see live openings.")
