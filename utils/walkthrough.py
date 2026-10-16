@@ -27,6 +27,10 @@ _STEPS = [
     ("💼", "Jobs — search or get recommendations",
      "On the **Jobs** page, search manually by role and location, or click one of the **recommended roles** "
      "built from your résumé. Press **Save** on any job to keep it on My Account."),
+    ("⚡", "Daily Picks — jobs chosen for you",
+     "Save the job titles you want and **Daily Picks** lists about 10 UK jobs a day at employers that can "
+     "sponsor a visa. For each one, **Prepare application** tailors your résumé, writes a cover letter and "
+     "gets your form details ready; then open the employer's page and press Submit yourself."),
     ("✉️", "Cover Letter — one letter per job",
      "Write a cover letter for a specific job. It's built from your résumé and checked line by line, then you "
      "can edit it, download it as a PDF, or save it to your account."),

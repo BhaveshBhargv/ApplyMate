@@ -1,0 +1,2 @@
+# Test-only dependencies:  pip install -r requirements-dev.txt  &&  python -m pytest -q tests
+pytest>=8.0

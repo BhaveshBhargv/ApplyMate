@@ -215,8 +215,19 @@ def section_picker(options, key: str) -> str:
     return value
 
 
+_NAV = [
+    ("Dashboard", "dashboard", "pages/1_🧭_Dashboard.py", 1.25),
+    ("ATS Match", "ats", "pages/2_🎯_ATS_Match.py", 1.25),
+    ("Jobs", "jobs", "pages/3_💼_Jobs.py", 0.9),
+    ("Daily Picks", "daily", "pages/6_⚡_Daily_Picks.py", 1.35),
+    ("Cover Letter", "cover", "pages/4_✉️_Cover_Letter.py", 1.5),
+    ("My Account", "account", "pages/5_👤_My_Account.py", 1.45),
+]
+
+
 def render_header(active: str) -> None:
-    """Render the wordmark lockup + top nav (Dashboard / ATS Match / Jobs / Cover Letter)."""
+    """Render the wordmark lockup + top nav (Dashboard / ATS Match / Jobs / Daily Picks /
+    Cover Letter / My Account / Log out)."""
     st.markdown(
         '<div class="rb-header"><span class="rb-word">Apply<em>Mate</em></span>'
         '<span class="rb-tag">Résumé + Jobs</span></div>',
@@ -225,34 +236,14 @@ def render_header(active: str) -> None:
     from utils import auth
 
     logged_in = auth.is_logged_in()
-    spacer, b1, b2, b3, b4, b5, b6 = st.columns([1.1, 1.3, 1.3, 1.0, 1.6, 1.5, 1.1 if logged_in else 0.01])
-    with b1:
-        if st.button("Dashboard", key="nav_dashboard", width="stretch",
-                     type="primary" if active == "dashboard" else "secondary",
-                     disabled=active == "dashboard"):
-            st.switch_page("pages/1_🧭_Dashboard.py")
-    with b2:
-        if st.button("ATS Match", key="nav_ats", width="stretch",
-                     type="primary" if active == "ats" else "secondary",
-                     disabled=active == "ats"):
-            st.switch_page("pages/2_🎯_ATS_Match.py")
-    with b3:
-        if st.button("Jobs", key="nav_jobs", width="stretch",
-                     type="primary" if active == "jobs" else "secondary",
-                     disabled=active == "jobs"):
-            st.switch_page("pages/3_💼_Jobs.py")
-    with b4:
-        if st.button("Cover Letter", key="nav_cover", width="stretch",
-                     type="primary" if active == "cover" else "secondary",
-                     disabled=active == "cover"):
-            st.switch_page("pages/4_✉️_Cover_Letter.py")
-    with b5:
-        if st.button("My Account", key="nav_account", width="stretch",
-                     type="primary" if active == "account" else "secondary",
-                     disabled=active == "account"):
-            st.switch_page("pages/5_👤_My_Account.py")
+    cols = st.columns([0.4] + [w for *_, w in _NAV] + [1.0 if logged_in else 0.01])
+    for col, (label, key, page, _w) in zip(cols[1:], _NAV):
+        with col:
+            if st.button(label, key=f"nav_{key}", width="stretch",
+                         type="primary" if active == key else "secondary", disabled=active == key):
+                st.switch_page(page)
     if logged_in:
-        with b6:
+        with cols[-1]:
             if st.button("Log out", key="nav_logout", width="stretch"):
                 auth.log_out()
                 st.rerun()

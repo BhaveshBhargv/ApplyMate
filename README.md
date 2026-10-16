@@ -48,6 +48,21 @@ numbers in `supabase/schema.sql`. The `app_logs` table records event names and
 error types only, never résumé content. Users can download or permanently delete
 all their data from **My Account**.
 
+## Daily Picks & visa sponsorship
+
+**Jobs** has a *Sponsorship* filter. A job is "Visa sponsor" when its employer is on the UK Home
+Office *Register of licensed sponsors: workers* (Skilled Worker route), downloaded from GOV.UK and
+cached for 6 hours. That means the company *can* sponsor, not that a given role is sponsored; listings
+that explicitly say they do (or don't) offer sponsorship are labelled too. Matching is on the
+normalised company name (exact), so a differently-registered trading name may show as unknown.
+
+**Daily Picks** (own page) takes up to 5 job titles and, once a day, picks ~10 UK jobs at licensed
+sponsors (max 2 per employer, nothing shown in the last 14 days). *Prepare application* builds a pack:
+a résumé tailored to the job (same content, relevant items first), a cover letter (1-2 of the daily AI
+requests) and the details the form asks for. You then open the employer's page and press Submit
+yourself -- ApplyMate never auto-submits (employers' systems don't accept third-party submissions, and
+bots break LinkedIn/Indeed terms). Needs `supabase/schema.sql` re-run (adds `daily_picks`).
+
 ## Project Structure
 
 The UI is a single two-panel **Dashboard** (edit on the left, live résumé
@@ -406,3 +421,12 @@ features.
   data models (`models/`), and business logic (`utils/`) are kept in separate
   modules.
 - Type hints are used throughout; important functions have docstrings.
+
+## Tests
+
+```
+pip install -r requirements-dev.txt
+python -m pytest -q tests
+```
+The suite runs headless against an in-memory fake of Supabase and never reads `.streamlit/secrets.toml`
+or touches real services (Supabase, Gmail, OpenRouter).

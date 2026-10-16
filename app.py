@@ -23,6 +23,7 @@ pages = [
     st.Page("pages/1_🧭_Dashboard.py", title="Dashboard", icon="🧭", url_path="dashboard", default=True),
     st.Page("pages/2_🎯_ATS_Match.py", title="ATS Match", icon="🎯", url_path="ats"),
     st.Page("pages/3_💼_Jobs.py", title="Jobs", icon="💼", url_path="jobs"),
+    st.Page("pages/6_⚡_Daily_Picks.py", title="Daily Picks", icon="⚡", url_path="daily-picks"),
     st.Page("pages/4_✉️_Cover_Letter.py", title="Cover Letter", icon="✉️", url_path="cover-letter"),
     st.Page("pages/5_👤_My_Account.py", title="My Account", icon="👤", url_path="account"),
 ]

@@ -14,7 +14,7 @@ from html import escape
 
 import streamlit as st
 
-from utils import ats_analyzer, auth, db, job_roles, job_search
+from utils import ats_analyzer, auth, db, job_roles, job_search, sponsors
 from utils.job_search import (
     WORK_TYPES,
     infer_country,
@@ -65,10 +65,23 @@ def _saved_job_hashes():
 
 PAGE_SIZE = 10
 
+SPONSOR_OPTIONS = ["Any sponsorship", "Visa sponsor (licensed)", "Not a licensed sponsor"]
+
+
+def _sponsor_ok(job, choice: str) -> bool:
+    """Display-time sponsorship filter. 'Licensed' = the employer is on the UK Home Office
+    register of Skilled Worker sponsors; jobs whose status is unknown never match either filter."""
+    if choice == SPONSOR_OPTIONS[1]:
+        return job.sponsor_licensed is True
+    if choice == SPONSOR_OPTIONS[2]:
+        return job.sponsor_licensed is False
+    return True
+
 
 def run_search(title: str, location: str, work_type: str) -> None:
     """Fetch jobs; per job, split its named skills into matched vs missing; sort."""
     result = search_jobs(title, location, infer_country(location), work_type)
+    sponsors.annotate(result.jobs)   # who can sponsor a visa (cached register; ~2s the first time)
     has_resume = bool(resume_text.strip())
     for job in result.jobs:
         # The job's own named skills (from its title + description), then split by
@@ -210,6 +223,7 @@ if result is not None:
             '.rb-badge{font-family:var(--mono);font-size:.6rem;font-weight:500;letter-spacing:.12em;'
             'text-transform:uppercase;padding:3px 8px;border-radius:6px;border:1px solid var(--line);color:var(--muted);white-space:nowrap;}'
             '.rb-badge.adzuna{color:var(--accent-ink);border-color:var(--chip-border);background:var(--wash);}'
+            '.rb-badge.sponsor{color:#1D4ED8;border-color:#BFDBFE;background:#EFF6FF;}'
             '.rb-job-meta{font-family:var(--mono);margin-top:9px;color:var(--muted);font-size:.75rem;letter-spacing:.01em;}'
             '.rb-job-meta .rb-fresh{color:var(--accent-ink);font-weight:600;}'
             '.rb-skills{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px;align-items:center;}'
@@ -226,7 +240,9 @@ if result is not None:
             '</style>',
             unsafe_allow_html=True,
         )
-        total = len(result.jobs)
+        sponsor_choice = st.session_state.get("job_sponsor", SPONSOR_OPTIONS[0])
+        visible = [j for j in result.jobs if _sponsor_ok(j, sponsor_choice)]
+        total = len(visible)
         total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
         page = min(max(st.session_state.get("job_page", 0), 0), total_pages - 1)
         st.session_state["job_page"] = page
@@ -238,19 +254,30 @@ if result is not None:
         if st.session_state.pop("_scroll_jobs_top", False):
             scroll_to("rb-job-results")
 
-        count_col, sort_col = st.columns([3, 1.3])
+        count_col, sponsor_col, sort_col = st.columns([2, 1.5, 1.2])
         with count_col:
+            shown = f"showing {start + 1}–{end}" if total else "none match"
             st.markdown(f'<p class="rb-eyebrow" style="margin-top:.6rem">'
-                        f'{total} openings &middot; showing {start + 1}–{end}</p>',
+                        f'{total} openings &middot; {shown}</p>',
                         unsafe_allow_html=True)
+        with sponsor_col:
+            st.selectbox("Sponsorship", SPONSOR_OPTIONS, key="job_sponsor", on_change=_reset_job_page,
+                         label_visibility="collapsed",
+                         help="Visa sponsor = the employer is on the UK Home Office register of licensed "
+                              "Skilled Worker sponsors. It means they CAN sponsor, not that this role is.")
         with sort_col:
             sort_choice = st.selectbox("Sort by", ["Relevance", "Newest first"], key="job_sort",
                                        on_change=_reset_job_page, label_visibility="collapsed")
+        if sponsor_choice != SPONSOR_OPTIONS[0] and not sponsors.register_available():
+            st.warning("The UK sponsor register couldn't be loaded just now, so sponsorship can't be "
+                       "checked. Try searching again in a minute.")
+        if not visible:
+            st.info("No jobs in these results match the sponsorship filter. Try \"Any sponsorship\".")
 
         # result.jobs is already in relevance order (run_search); re-sorting
         # here is just a display-time reorder of the already-fetched list --
         # no re-search needed, so switching the toggle is instant.
-        jobs = result.jobs
+        jobs = visible
         if sort_choice == "Newest first":
             jobs = sorted(jobs, key=lambda j: j.freshness_days if j.freshness_days is not None else 10**6)
         page_jobs = jobs[start:start + PAGE_SIZE]
@@ -295,6 +322,14 @@ if result is not None:
                     return (f'<div class="rb-skills"><span class="rb-skills-lbl">{label}</span>'
                             f'{chips}{more}</div>')
 
+                sponsor_html = ""
+                if job.sponsor_licensed:
+                    sponsor_html += '<span class="rb-badge sponsor" title="Employer is on the UK Home Office sponsor register">Visa sponsor</span>'
+                if job.sponsorship_text == "yes":
+                    sponsor_html += '<span class="rb-badge sponsor">Sponsorship offered</span>'
+                elif job.sponsorship_text == "no":
+                    sponsor_html += '<span class="rb-badge">No sponsorship</span>'
+
                 skills_html = (_skill_row("Matches", job.matched_skills, "rb-chip")
                                + _skill_row("Missing", job.missing_skills, "rb-chip-miss"))
 
@@ -303,7 +338,7 @@ if result is not None:
                     f'<div class="rb-job-title">{escape(job.title)}</div>'
                     f'<div class="rb-job-co">{escape(job.company) or "—"}</div></div>'
                     f'<div class="rb-tags">'
-                    f'<span class="rb-badge {badge_cls}">{escape(job.source)}</span></div>'
+                    f'<span class="rb-badge {badge_cls}">{escape(job.source)}</span>{sponsor_html}</div>'
                     '</div>'
                     f'<div class="rb-job-meta">{meta_html}</div>'
                     f'{skills_html}',

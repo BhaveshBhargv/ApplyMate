@@ -63,6 +63,13 @@ create table if not exists public.saved_jobs (
 );
 create index if not exists saved_jobs_user_idx on public.saved_jobs (user_id, saved_at desc);
 
+-- Daily picks: the user's saved job titles and today's ~10 picks (one row per user, encrypted).
+create table if not exists public.daily_picks (
+    user_id    uuid primary key references auth.users (id) on delete cascade,
+    data_enc   text not null check (length(data_enc) <= 262144),
+    updated_at timestamptz not null default now()
+);
+
 -- Per-user daily AI-call counter (protects the shared OpenRouter free quota).
 create table if not exists public.ai_usage (
     user_id uuid not null references auth.users (id) on delete cascade,
@@ -96,6 +103,7 @@ alter table public.resumes       enable row level security;
 alter table public.cover_letters enable row level security;
 alter table public.saved_jobs    enable row level security;
 alter table public.ai_usage      enable row level security;
+alter table public.daily_picks   enable row level security;
 alter table public.app_logs      enable row level security;
 
 drop policy if exists "own profile" on public.profiles;
@@ -112,6 +120,10 @@ create policy "own cover letters" on public.cover_letters for all to authenticat
 
 drop policy if exists "own saved jobs" on public.saved_jobs;
 create policy "own saved jobs" on public.saved_jobs for all to authenticated
+    using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+
+drop policy if exists "own daily picks" on public.daily_picks;
+create policy "own daily picks" on public.daily_picks for all to authenticated
     using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
 
 -- ai_usage: read-only for the owner (writes only through consume_ai_call()).
@@ -145,6 +157,9 @@ create trigger resumes_touch before update on public.resumes
     for each row execute function public.set_updated_at();
 drop trigger if exists cover_letters_touch on public.cover_letters;
 create trigger cover_letters_touch before update on public.cover_letters
+    for each row execute function public.set_updated_at();
+drop trigger if exists daily_picks_touch on public.daily_picks;
+create trigger daily_picks_touch before update on public.daily_picks
     for each row execute function public.set_updated_at();
 drop trigger if exists saved_jobs_touch on public.saved_jobs;
 create trigger saved_jobs_touch before update on public.saved_jobs

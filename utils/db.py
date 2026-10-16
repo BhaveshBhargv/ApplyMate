@@ -329,7 +329,7 @@ def saved_job_hashes() -> Set[str]:
     return {r["url_hash"] for r in rows}
 
 
-def save_job(job: Any) -> str:
+def save_job(job: Any, status: str = "saved") -> str:
     """Save a JobPosting (or dict). Saving the same URL twice is a no-op."""
     data = asdict(job) if hasattr(job, "__dataclass_fields__") else dict(job)
     snapshot = {k: str(data.get(k, "") or "")[:500] for k in _JOB_FIELDS}
@@ -340,7 +340,8 @@ def save_job(job: Any) -> str:
     blob = crypto.encrypt_json(dek, uid, "saved_job", row_id, {"job": snapshot, "notes": ""})
     rows = _call("POST", "saved_jobs", params={"on_conflict": "user_id,url_hash"},
                  payload=[{"id": row_id, "user_id": uid, "url_hash": job_hash(snapshot["url"]),
-                           "source": snapshot["source"][:40], "status": "saved", "data_enc": blob}],
+                           "source": snapshot["source"][:40],
+                           "status": status if status in JOB_STATUSES else "saved", "data_enc": blob}],
                  prefer="resolution=ignore-duplicates,return=representation")
     if rows:
         applog.log("job_saved", "data", source=snapshot["source"][:40])
@@ -374,6 +375,25 @@ def delete_saved_job(job_id: str) -> None:
           prefer="return=minimal")
     st.session_state.pop("_saved_job_hashes", None)   # the Jobs page marks cards from this cache
     applog.log("job_removed", "data")
+
+
+# --- Daily picks -------------------------------------------------------------
+
+def load_daily_picks() -> Dict[str, Any]:
+    """The user's daily-picks state (saved titles, today's list...), or {} if none yet."""
+    uid = _uid()
+    rows = _call("GET", "daily_picks", params={"user_id": f"eq.{uid}", "select": "data_enc"}) or []
+    if not rows:
+        return {}
+    return _decrypt("daily_picks", {"id": uid, "data_enc": rows[0]["data_enc"]}) or {}
+
+
+def save_daily_picks(state: Dict[str, Any]) -> None:
+    uid = _uid()
+    blob = crypto.encrypt_json(_dek(), uid, "daily_picks", uid, state)
+    _call("POST", "daily_picks", params={"on_conflict": "user_id"},
+          payload=[{"user_id": uid, "data_enc": blob}],
+          prefer="resolution=merge-duplicates,return=minimal")
 
 
 # --- AI quota ----------------------------------------------------------------
@@ -414,13 +434,14 @@ def export_all() -> Dict[str, Any]:
         "cover_letters": [asdict(c) for c in list_cover_letters()],
         "saved_jobs": [{"status": j.status, "saved_at": j.saved_at, "notes": j.notes, **j.job}
                        for j in list_saved_jobs()],
+        "daily_picks": {k: v for k, v in load_daily_picks().items() if k in ("titles", "location")},
     }
 
 
 def delete_all_data() -> None:
     """Delete every résumé, cover letter and saved job; the login stays."""
     uid = _uid()
-    for table in ("cover_letters", "saved_jobs", "resumes"):
+    for table in ("daily_picks", "cover_letters", "saved_jobs", "resumes"):
         _call("DELETE", table, params={"user_id": f"eq.{uid}"}, prefer="return=minimal")
     st.session_state.pop("_saved_job_hashes", None)
     applog.log("user_data_deleted", "privacy")

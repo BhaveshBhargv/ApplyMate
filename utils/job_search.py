@@ -262,6 +262,9 @@ class JobPosting:
     missing_skills: List[str] = field(default_factory=list)   # job skills you lack (set by the page)
     match_score: Optional[int] = None           # retained for sorting only; not displayed
     freshness_days: Optional[int] = None         # days since posted (set by the page)
+    # Visa-sponsorship signals (set by utils.sponsors.annotate; see that module for what they mean)
+    sponsor_licensed: Optional[bool] = None      # employer is on the UK Home Office sponsor register? None = unknown
+    sponsorship_text: str = ""                   # "yes" / "no" if the listing says so, else ""
 
 
 @dataclass
