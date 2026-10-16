@@ -38,6 +38,7 @@ _DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"  # free tier on OpenRo
 _DEFAULT_FALLBACK_MODELS = ("nvidia/nemotron-3-super-120b-a12b:free",)
 _MAX_ATTEMPTS = 3          # per model, including the first try
 _RETRY_BACKOFF_SECONDS = 1.5  # doubled on each retry
+_QUICK_TIMEOUT_SECONDS = 12.0  # "quick" calls (page-load helpers) give up fast: one try, two models at most
 
 # Substrings that mark a failure as worth retrying rather than reporting.
 _TRANSIENT_HINTS = (
@@ -279,7 +280,8 @@ def _enforce_daily_limit() -> None:
                       "The allowance resets at midnight UTC.")
 
 
-def _generate(prompt: str, temperature: float = 0.4, *, system: Optional[str] = None) -> str:
+def _generate(prompt: str, temperature: float = 0.4, *, system: Optional[str] = None,
+              quick: bool = False) -> str:
     """Send one prompt to the model (OpenRouter) and return the trimmed text.
 
     `system` overrides the résumé-editor system prompt for tasks that aren't
@@ -290,6 +292,10 @@ def _generate(prompt: str, temperature: float = 0.4, *, system: Optional[str] = 
     `_MAX_ATTEMPTS` tries with exponential backoff before moving on. Only a
     genuinely transient failure is retried -- a bad key, a bad model slug, or a
     rejected prompt is reported immediately, with the provider's own wording.
+
+    `quick=True` is for calls made while a page loads: a single 12-second try on at most two
+    models, so a busy free tier costs seconds -- not the several minutes the full retry ladder
+    can take (2 models x 3 tries x 120 s timeouts).
     """
     key = _api_key()
     if not key:
@@ -303,15 +309,16 @@ def _generate(prompt: str, temperature: float = 0.4, *, system: Optional[str] = 
         api_key=key,
         base_url=_base_url(),
         default_headers={"X-Title": "AI Resume Builder"},  # optional OpenRouter attribution
-        timeout=120.0,
+        timeout=_QUICK_TIMEOUT_SECONDS if quick else 120.0,
         max_retries=0,  # retries are handled below, so backoff and fallback stay in one place
     )
 
-    chain = _model_chain()
+    chain = _model_chain()[:2] if quick else _model_chain()
+    attempts = 1 if quick else _MAX_ATTEMPTS
     last_reason = "no attempt was made"
     last_transient = False
     for model in chain:
-        for attempt in range(_MAX_ATTEMPTS):
+        for attempt in range(attempts):
             reason = ""
             try:
                 response = client.chat.completions.create(
@@ -356,7 +363,7 @@ def _generate(prompt: str, temperature: float = 0.4, *, system: Optional[str] = 
             # contain digits that look like status codes.
             last_reason = f"{reason} [model: {model}]"
             last_transient = _is_transient(reason)
-            if not last_transient or attempt + 1 >= _MAX_ATTEMPTS:
+            if not last_transient or attempt + 1 >= attempts:
                 break
             time.sleep(_RETRY_BACKOFF_SECONDS * (2 ** attempt))
 
@@ -653,7 +660,7 @@ def suggest_improvements(resume: ResumeData, jd: str = "") -> str:
     return _generate(prompt, temperature=0.4)
 
 
-def suggest_job_roles(facts: str, max_roles: int = 3) -> List[str]:
+def suggest_job_roles(facts: str, max_roles: int = 3, *, quick: bool = False) -> List[str]:
     """Suggest job titles to search for from résumé `facts` already ordered
     most recent first (see utils.job_roles) -- a natural next step or clear
     lateral fit, never a specialization the résumé has no evidence for."""
@@ -688,5 +695,5 @@ def suggest_job_roles(facts: str, max_roles: int = 3) -> List[str]:
         "bullets, no explanation, no duplicates.\n\n"
         f"CANDIDATE FACTS (most recent first):\n{facts}"
     )
-    text = _generate(prompt, temperature=0.4)
+    text = _generate(prompt, temperature=0.4, quick=quick)
     return _parse_bullets(text)[:max_roles]

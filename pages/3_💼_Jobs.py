@@ -143,14 +143,30 @@ def _resume_role_fingerprint(r) -> str:
 
 
 def _get_role_suggestions(r) -> list:
+    """Role chips for the page, INSTANTLY: the keyword-based roles (no network). The AI's better
+    suggestions are fetched after the page has drawn (bottom of this script) and swapped in.
+    State: (fingerprint, roles, stage) with stage "fallback" -> "tried" (AI attempted) / "ai"."""
     fingerprint = _resume_role_fingerprint(r)
     cached = st.session_state.get("job_role_suggestions")
-    if cached and cached[0] == fingerprint:
-        return cached[1]
-    with st.spinner("Finding role suggestions for your résumé..."):
-        roles = job_roles.suggest_roles(r)
-    st.session_state["job_role_suggestions"] = (fingerprint, roles)
-    return roles
+    if not cached or len(cached) != 3 or cached[0] != fingerprint:   # (a 2-tuple = left by an older version)
+        cached = (fingerprint, job_roles.fallback_roles(r), "fallback")
+        st.session_state["job_role_suggestions"] = cached
+    return cached[1]
+
+
+def _upgrade_role_suggestions(r) -> None:
+    """After the page is on screen: try the AI once for this résumé (short time budget). If it
+    gives different roles, store them and redraw so the chips update. Marked "tried" first, so a
+    slow or failing AI is never retried on every rerun."""
+    cached = st.session_state.get("job_role_suggestions")
+    if not cached or len(cached) != 3 or cached[2] != "fallback" or not job_roles.has_enough_to_suggest(r):
+        return
+    fingerprint = cached[0]
+    st.session_state["job_role_suggestions"] = (fingerprint, cached[1], "tried")
+    roles = job_roles.suggest_roles_ai(r)
+    if roles and roles != cached[1] and _resume_role_fingerprint(r) == fingerprint:
+        st.session_state["job_role_suggestions"] = (fingerprint, roles, "ai")
+        st.rerun()
 
 
 # --- Role suggestions, grounded in the résumé -----------------------------------
@@ -400,3 +416,7 @@ else:
     st.caption("Enter a title and hit **Search jobs** to see live openings.")
 
 render_download_footer(resume)
+
+# Last of all, once everything above is on screen: the AI's role suggestions (may take a few
+# seconds; the chips update in place if they differ from the instant ones).
+_upgrade_role_suggestions(resume)

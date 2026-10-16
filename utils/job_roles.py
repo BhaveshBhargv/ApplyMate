@@ -277,6 +277,17 @@ def timeline_facts(resume: ResumeData) -> str:
     return "\n".join(blocks)
 
 
+def suggest_roles_ai(resume: ResumeData, max_roles: int = 3) -> List[str]:
+    """AI role suggestions only, with a short time budget; [] if the AI is unavailable, slow or
+    fails. Meant to run AFTER the page has drawn (see the Jobs page), never before it."""
+    if not has_enough_to_suggest(resume) or not ai_assistant.is_configured():
+        return []
+    try:
+        return ai_assistant.suggest_job_roles(timeline_facts(resume), max_roles=max_roles, quick=True)
+    except ai_assistant.AIError:
+        return []
+
+
 def suggest_roles(resume: ResumeData, max_roles: int = 3) -> List[str]:
     """Return up to `max_roles` job titles to search for.
 

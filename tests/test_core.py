@@ -152,3 +152,81 @@ def test_dashboard_sections_and_their_add_remove_buttons(fake, section, prefix):
     for b in [b for b in at.button if b.label.startswith(prefix)][:1]:
         b.click(); at.run()
         assert not at.exception, (section, b.label, [e.value for e in at.exception])
+
+
+# ------------------------------------------------------------- Jobs page: role suggestions
+def _chips(at):
+    return [b.label for b in at.button if b.key and b.key.startswith("role_sugg_")]
+
+
+def test_role_chips_appear_instantly_and_the_ai_upgrade_swaps_them_in(fake, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
+    calls = []
+
+    def ai_roles(facts, max_roles=3, quick=False):
+        calls.append(quick)
+        return ["AI Role One", "AI Role Two"]
+
+    monkeypatch.setattr(ai_assistant, "suggest_job_roles", ai_roles)
+    at, _ = page_as_user(fake, PAGES[2])
+    at.session_state["resume_data"] = software_resume()
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert calls == [True]                                      # one AI call, with the short time budget
+    assert at.session_state["job_role_suggestions"][2] == "ai"
+    at.run()                                                    # the redrawn page shows the AI's roles
+    assert _chips(at) == ["AI Role One", "AI Role Two"] and calls == [True]   # ...without asking again
+
+
+def test_a_slow_or_failing_ai_never_blocks_the_page_or_repeats(fake, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
+    calls = []
+
+    def broken(facts, max_roles=3, quick=False):
+        calls.append(1)
+        raise ai_assistant.AIError("busy")
+
+    monkeypatch.setattr(ai_assistant, "suggest_job_roles", broken)
+    at, _ = page_as_user(fake, PAGES[2])
+    at.session_state["resume_data"] = software_resume()
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert _chips(at)                                           # keyword-based chips are there regardless
+    at.run(); at.run()
+    assert calls == [1]                                         # tried once, never retried on reruns
+    assert at.session_state["job_role_suggestions"][2] == "tried"
+
+
+def test_role_suggestions_state_from_an_older_version_does_not_crash(fake):
+    at, _ = page_as_user(fake, PAGES[2])
+    at.session_state["resume_data"] = software_resume()
+    at.session_state["job_role_suggestions"] = ("old-fingerprint", ["Old Role"])   # the old 2-tuple shape
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+
+
+def test_quick_ai_calls_give_up_fast(monkeypatch):
+    """The page-load AI call must be bounded: one short try on at most two models (it used to be
+    able to run for minutes: 2 models x 3 tries x 120 s)."""
+    import openai
+    seen = {"timeouts": [], "models": []}
+
+    class FakeClient:
+        def __init__(self, **kw):
+            seen["timeouts"].append(kw["timeout"])
+            self.chat = type("C", (), {"completions": type("X", (), {"create": staticmethod(self._create)})})()
+
+        @staticmethod
+        def _create(model, **kw):
+            seen["models"].append(model)
+            raise RuntimeError("503 service unavailable")      # a transient failure
+
+    monkeypatch.setattr(openai, "OpenAI", FakeClient)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
+    monkeypatch.setattr(ai_assistant, "_get_secret", lambda name: __import__("os").environ.get(name))
+    monkeypatch.setattr(ai_assistant, "_enforce_daily_limit", lambda: None)
+    monkeypatch.setattr(ai_assistant.time, "sleep", lambda s: seen.setdefault("slept", []).append(s))
+    with pytest.raises(ai_assistant.AIError):
+        ai_assistant._generate("hi", quick=True)
+    assert seen["timeouts"] == [ai_assistant._QUICK_TIMEOUT_SECONDS] and len(seen["models"]) <= 2
+    assert not seen.get("slept")                                # no backoff sleeping either
